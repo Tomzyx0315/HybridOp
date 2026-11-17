@@ -21,6 +21,8 @@ source /data_fs/zhangyuxuan/HybridOp/setup/env.sh
 ```
 
 环境入口会设置 `PYTHON_BIN`、`NANOCHAT_BASE_DIR`、HF/编译缓存、临时目录和日志目录。
+多卡编译时，训练入口把 Inductor/Triton 缓存分别放到所配置目录的 `rank0`、`rank1`
+等子目录，避免各 rank 在共享文件系统上同时生成同一缓存文件。
 `prepacked_T2048_llama` 和 `hybrid_runs` 分别链接到上面的数据和 checkpoint 目录，
 因此原启动脚本的默认路径也会落在 `/data_fs`。
 

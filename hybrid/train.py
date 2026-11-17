@@ -94,6 +94,13 @@ def validate_resume(cfg, meta, world_size):
 
 
 def run_training(cfg, resolved):
+    # Triton/Inductor artifacts can race when ranks compile simultaneously on a
+    # shared filesystem. Keep each rank's artifacts under the configured root.
+    # This must happen before importing torch, which reads cache environment vars.
+    if cfg.compile and "RANK" in os.environ:
+        for name in ("TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR"):
+            if os.environ.get(name):
+                os.environ[name] = str(Path(os.environ[name]) / f"rank{int(os.environ['RANK'])}")
     import torch
     import torch.distributed as dist
     from hybrid.model import ExperimentGPT, training_precision
