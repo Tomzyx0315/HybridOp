@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper."
+title: "looped-lm-scaling: Iso-Depth Scaling Laws for Looped Language Models"
+version: "neurips2026"
+date-released: 2026-10-30
+authors:
+  - family-names: Schwethelm
+    given-names: Kristian
+    affiliation: "Chair for AI in Healthcare and Medicine, Technical University of Munich (TUM) and TUM University Hospital"
+  - family-names: Rueckert
+    given-names: Daniel
+    affiliation: "Chair for AI in Healthcare and Medicine, Technical University of Munich (TUM) and TUM University Hospital; Department of Computing, Imperial College London; Munich Center for Machine Learning (MCML)"
+  - family-names: Kaissis
+    given-names: Georgios
+    affiliation: "Hasso Plattner Institute for Digital Engineering, University of Potsdam"
+preferred-citation:
+  type: conference-paper
+  title: "How Much Is One Recurrence Worth? Iso-Depth Scaling Laws for Looped Language Models"
+  authors:
+    - family-names: Schwethelm
+      given-names: Kristian
+    - family-names: Rueckert
+      given-names: Daniel
+    - family-names: Kaissis
+      given-names: Georgios
+  year: 2026
+  collection-title: "The Fortieth Annual Conference on Neural Information Processing Systems"
+  url: "https://openreview.net/forum?id=iBvm5lCnAJ"
