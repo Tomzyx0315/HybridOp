@@ -184,3 +184,25 @@ def test_agreed_flops_for_all_variants():
     for mode, flops in expected.items():
         assert estimated_flops_per_token(model, replace(cfg, prelude_mode=mode)) == flops
         assert estimated_flops_per_token(model, replace(cfg, prelude_mode=mode, zo_lambda=0)) == 1690353664
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA acceptance check")
+@pytest.mark.parametrize("compiled", [False, True])
+def test_cuda_joint_retained_and_recomputed_match(compiled):
+    cfg, retained, x, y = tiny()
+    retained = retained.cuda()
+    retained.transformer.wte.to(torch.bfloat16)
+    recomputed = copy.deepcopy(retained)
+    cfg = replace(cfg, prelude_mode="joint", zo_rho=2, zo_lambda=0.7)
+    if compiled:
+        torch._dynamo.config.disable = False
+        retained.compile_blocks()
+        recomputed.compile_blocks()
+    for micro in range(2):
+        left, _ = backward(retained, x.cuda(), y.cuda(), cfg, micro=micro, accum=2)
+        right, _ = backward(recomputed, x.cuda(), y.cuda(), replace(cfg, prelude_mode="joint_recompute"),
+                            micro=micro, accum=2)
+        torch.testing.assert_close(left, right, rtol=1e-5, atol=1e-7)
+    for name, p in retained.named_parameters():
+        torch.testing.assert_close(p.grad, dict(recomputed.named_parameters())[name].grad,
+                                   rtol=1e-5, atol=1e-7, msg=name)

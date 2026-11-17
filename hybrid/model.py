@@ -80,8 +80,9 @@ class ExperimentGPT(GPT):
                 yield name, parameter
 
 
-def training_precision(device):
-    return torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" else nullcontext()
+def training_precision(device, *, cache_enabled=True):
+    return (torch.autocast("cuda", dtype=torch.bfloat16, cache_enabled=cache_enabled)
+            if device.type == "cuda" else nullcontext())
 
 
 @contextmanager

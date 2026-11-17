@@ -10,7 +10,9 @@ from hybrid.model import GaussianDirection, derive_seed, probe_precision, traini
 
 def _suffix_loss(model, e, targets, fo_loops, need_boundary):
     early = model.config.num_recur - fo_loops
-    with torch.no_grad():
+    # Do not let the early no_grad visits populate autocast's weight cache:
+    # the same parameters need differentiable casts in the later FO visits.
+    with torch.no_grad(), training_precision(e.device, cache_enabled=False):
         state = model.early_loops(e.detach(), early)
     boundary = state.detach().requires_grad_(need_boundary)
     state = boundary

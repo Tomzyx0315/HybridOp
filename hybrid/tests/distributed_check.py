@@ -33,8 +33,13 @@ def check_variant(prelude_mode, rank, world, device):
     reference_params = dict(reference.named_parameters())
     groups = []
     for group in optimizer.param_groups:
-        groups.append({**{key: value for key, value in group.items() if key != "params"},
-                       "params": [reference_params[lookup[id(p)]] for p in group["params"]]})
+        options = {key: value for key, value in group.items() if key != "params"}
+        params = [reference_params[lookup[id(p)]] for p in group["params"]]
+        # Muon uses BF16 batched matmuls. Match the owners' batch sizes so this
+        # checks distributed averaging/update, rather than batch-kernel roundoff.
+        chunk = (len(params) + world - 1) // world if group["kind"] == "muon" else len(params)
+        for start in range(0, len(params), chunk):
+            groups.append({**options, "params": params[start:start + chunk]})
     expected_optimizer = MuonAdamW(groups)
     for step in range(3):
         gen = torch.Generator(device=device).manual_seed(200 + rank + step * world)
@@ -49,7 +54,8 @@ def check_variant(prelude_mode, rank, world, device):
         expected_optimizer.step()
         optimizer.step()
         for name, p in model.named_parameters():
-            torch.testing.assert_close(p, reference_params[name], rtol=1e-5, atol=1e-6)
+            torch.testing.assert_close(p, reference_params[name], rtol=1e-5, atol=1e-6,
+                                       msg=f"{prelude_mode}, step {step}, {name}")
             from_rank_zero = p.detach().clone()
             dist.broadcast(from_rank_zero, src=0)
             assert torch.equal(p, from_rank_zero), f"Rank parameters drifted: {name} ({prelude_mode})"

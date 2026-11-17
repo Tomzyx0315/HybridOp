@@ -133,6 +133,10 @@ lambda 对参数补偿和输入补偿各乘一次。lambda=1 也不消除 ZO 的
   进行。`--zo-probe-dtype fp32` 提供数值诊断路径，关闭该作用域的 autocast/TF32，
   attention 使用原仓库 SDPA fallback；它的实际耗时不应与 BF16 混为一谈。
 
+GPU 验收发现，BF16 下即使编译与 eager 的前向非常接近，两点差分也可能显著放大
+舍入差异。因此不能要求两者的 ZO 梯度逐元素接近。默认精度仍保留 BF16；正式实验
+前应结合 `check_probe` 检查扰动幅度，FP32 探测路径用于区分量化误差与估计方差。
+
 依据：
 
 1. [MeZO 官方 large_models/mezo.sh](https://github.com/princeton-nlp/MeZO/blob/main/large_models/mezo.sh)
@@ -159,6 +163,8 @@ lambda 对参数补偿和输入补偿各乘一次。lambda=1 也不消除 ZO 的
 再将合并的输入梯度传回 prelude。`separate/joint` 在此期间保留 prelude 图；
 `joint_recompute` 在此期间不保存 prelude 的内部激活，最后重新执行其前向。
 这些方案都无需 `retain_graph=True`，也不对早期循环构建反向图。
+早期 `no_grad` 循环单独关闭 autocast 权重缓存，防止它缓存不带梯度的 BF16 权重，
+导致后续共享层 FO 复用缓存而丢失参数梯度；末尾 FO 继续使用正常 autocast 缓存。
 
 这一顺序避免同时保留末尾 FO 激活与探测临时参数。使用逐 block
 [`functional_call`](https://docs.pytorch.org/docs/2.9/generated/torch.func.functional_call.html)
@@ -247,8 +253,10 @@ bash hybrid/scripts/hybrid.sh --num-iterations 1000 --output-dir /path/to/new-ru
 
 ## 验收
 
-本次在 Mac 仅执行配置/语法检查；未安装训练依赖、未运行数值训练或 CUDA 测试。
-下面的测试已提供，需在实验机运行：
+Mac 仅执行配置/语法检查。2026-11-17 已在 hd-4 的 8 张 RTX 4090 上完成验收：
+57 项 CPU 测试、12 项 CUDA 测试、四种 Hybrid 的两卡更新检查，以及六种方案各
+4 步的 8 卡小模型 smoke；实际 219M 尺寸的单批检查也通过。正式训练尚未启动。
+环境、数据版本与检查边界见 [`HD4.md`](HD4.md)。复现检查：
 
 ```bash
 python -m unittest hybrid.tests.test_config
@@ -273,6 +281,9 @@ python -m hybrid.check_probe --checkpoint-dir /path/to/run --step 100 \
 更新一致性、原参数/RNG 不变、异常恢复、prelude 只反传一次、FO 后探测顺序、
 CUDA BF16 编译路径、四种方案的 checkpoint 续训一致性。跨卡梯度只由原优化器
 同步一次，不额外包 DDP。
+GPU 测试另外验证早期 `no_grad` 不丢失共享层 FO 梯度、FP32 参数/联合探测与精确局部
+VJP 一致，以及两种 joint 执行方式的一致性。多卡更新参考使用与分片相同的 Muon
+矩阵批大小，避免把 BF16 批矩阵乘内核的舍入差异误判为梯度同步错误。
 
 `check_probe` 先用一次精确局部反传取得参考方向导数，再比较 BF16/FP32 探测。
 它有意使用早期循环的激活图，只用于验收，不参与训练。FP32 探测与 BF16 参考反传

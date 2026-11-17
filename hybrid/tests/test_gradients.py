@@ -7,9 +7,9 @@ import pytest
 import torch
 
 from hybrid.config import Config, PRELUDE_MODES
-from hybrid.model import ExperimentGPT, GaussianDirection, derive_seed
+from hybrid.model import ExperimentGPT, GaussianDirection, derive_seed, probe_precision
 from hybrid.steps import (add_local_zo, backward_microbatch, estimated_flops_per_token,
-                          local_directional_derivative, suffix_backward)
+                          local_directional_derivative, local_probe_difference, suffix_backward)
 from hybrid.train import model_config
 from nanochat.gpt import GPT
 
@@ -194,6 +194,29 @@ def test_one_direction_flop_estimate_matches_full_fo():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA acceptance check")
+@pytest.mark.parametrize("mode", ["truncated", "hybrid"])
+def test_cuda_no_grad_prefix_preserves_shared_fo_gradients(mode):
+    cfg, model, x, y = tiny(mode)
+    cfg = replace(cfg, zo_lambda=0)
+    model = model.cuda()
+    model.transformer.wte.to(torch.bfloat16)
+    upstream = GPT(replace(model.config, bptt_k=1)).cuda()
+    upstream.init_weights()
+    upstream.load_state_dict(model.state_dict())
+    x, y = x.cuda(), y.cuda()
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        reference_loss = upstream(x, y)
+    reference_loss.backward()
+    loss, _ = backward(model, x, y, cfg)
+    torch.testing.assert_close(loss, reference_loss.detach())
+    reference_parameters = dict(upstream.named_parameters())
+    for name, parameter in model.named_parameters():
+        assert parameter.grad is not None, f"Lost FO gradient after no_grad visit: {name}"
+        torch.testing.assert_close(parameter.grad, reference_parameters[name].grad,
+                                   rtol=1e-4, atol=1e-6, msg=name)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA acceptance check")
 @pytest.mark.parametrize("prelude_mode", PRELUDE_MODES)
 def test_cuda_bf16_compiled_hybrid(prelude_mode):
     cfg, model, x, y = tiny()
@@ -202,11 +225,46 @@ def test_cuda_bf16_compiled_hybrid(prelude_mode):
     model = model.cuda()
     model.transformer.wte.to(torch.bfloat16)
     eager = copy.deepcopy(model)
+    original_values = {name: p.detach().clone() for name, p in model.named_parameters()}
     model.compile_blocks()
     for micro in range(2):
-        backward(model, x.cuda(), y.cuda(), cfg, micro=micro)
-        backward(eager, x.cuda(), y.cuda(), cfg, micro=micro)
+        compiled_loss, _ = backward(model, x.cuda(), y.cuda(), cfg, micro=micro)
+        eager_loss, _ = backward(eager, x.cuda(), y.cuda(), cfg, micro=micro)
+        torch.testing.assert_close(compiled_loss, eager_loss, rtol=0.01, atol=1e-3)
     for name, p in model.named_parameters():
+        assert p.grad is not None, name
         assert torch.isfinite(p.grad).all()
-        # Compilation may fuse BF16 pointwise operations differently.
-        torch.testing.assert_close(p.grad, dict(eager.named_parameters())[name].grad, rtol=0.15, atol=1e-3)
+        assert torch.equal(p, original_values[name]), name
+    # BF16 two-point differences amplify compilation's rounding differences;
+    # close forward values do NOT imply close ZO estimates. Check derivatives
+    # independently against an exact FP32 local VJP below, rather than loosening
+    # a BF16 gradient-equivalence tolerance until it passes.
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA acceptance check")
+@pytest.mark.parametrize("compiled", [False, True])
+@pytest.mark.parametrize("joint", [False, True])
+def test_cuda_fp32_probe_matches_exact_local_vjp(compiled, joint):
+    _, model, x, y = tiny()
+    model = model.cuda()
+    model.transformer.wte.to(torch.bfloat16)
+    _, e, v = suffix_backward(model, x.cuda(), y.cuda(), 1, need_boundary=True)
+    input_leaf = e.float().detach().requires_grad_(True)
+    shared = list(model.shared_named_parameters())
+    with probe_precision(e.device, "fp32"):
+        local = (model.early_loops(input_leaf, 1) * v.float()).sum()
+        gradients = torch.autograd.grad(local, [input_leaf] + [p for _, p in shared])
+    direction = GaussianDirection(101)
+    expected = sum((g * direction.noise(name, p)).sum()
+                   for (name, p), g in zip(shared, gradients[1:]))
+    parameter_epsilon, input_epsilon = 1e-4, 3e-4
+    if joint:
+        expected = expected + input_epsilon / parameter_epsilon * (
+            gradients[0] * direction.noise("prelude_output", e.float())).sum()
+    if compiled:
+        torch._dynamo.config.disable = False
+        model.compile_blocks()
+    difference = local_probe_difference(
+        model, e, v, 1, direction, parameter_epsilon,
+        direction if joint else None, input_epsilon if joint else 0.0, "fp32")
+    torch.testing.assert_close(difference / (2 * parameter_epsilon), expected, rtol=0.02, atol=2e-6)
