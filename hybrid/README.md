@@ -255,7 +255,7 @@ bash hybrid/scripts/hybrid.sh --num-iterations 1000 --output-dir /path/to/new-ru
 
 Mac 仅执行配置/语法检查。2026-11-17 已在 hd-4 的 8 张 RTX 4090 上完成验收：
 57 项 CPU 测试、12 项 CUDA 测试、四种 Hybrid 的两卡更新检查，以及六种方案各
-4 步的 8 卡小模型 smoke；实际 219M 尺寸的单批检查也通过。正式训练尚未启动。
+4 步的 8 卡小模型 smoke；实际 219M 尺寸的单批检查也通过。
 环境、数据版本与检查边界见 [`HD4.md`](HD4.md)。复现检查：
 
 ```bash
@@ -293,3 +293,99 @@ VJP 一致，以及两种 joint 执行方式的一致性。多卡更新参考使
 不能把联合标量直接与纯参数方向导数比较。`joint` 的输入 epsilon 默认按 checkpoint
 记录的 rho 随参数 epsilon 变化；诊断时可用 `--zo-rho` 改比例，或 `--input-epsilon`
 固定绝对输入尺度，两者不能同时指定。
+
+### 已训练 checkpoint 的梯度分解
+
+`diagnose_gradients` 使用原 world size、每卡数据游标和梯度累积次数，重放一个
+完整 optimizer batch。可读取完整 FO、truncated 或 `hybrid/none` checkpoint，
+统一评估末轮 FO 加首轮参数 ZO；每个 microbatch 一个方向：
+
+```bash
+torchrun --standalone --nproc_per_node=8 -m hybrid.diagnose_gradients \
+    --checkpoint-dir /path/to/hybrid_none/run --step 8000 \
+    --output-dir /path/to/diagnostics/eager
+# 复核生产编译路径，省略精度扫描和优化器反事实更新
+torchrun --standalone --nproc_per_node=8 -m hybrid.diagnose_gradients \
+    --checkpoint-dir /path/to/hybrid_none/run --step 8000 \
+    --output-dir /path/to/diagnostics/compiled --compile --no-scan --no-updates
+# 比较不同训练阶段时固定数据游标和扰动种子（checkpoint 均位于同一 run）
+torchrun --standalone --nproc_per_node=8 -m hybrid.diagnose_gradients \
+    --checkpoint-dir /path/to/full_fo/run --step 16000 \
+    --data-step 8000 --direction-step 8000 \
+    --output-dir /path/to/diagnostics/full_fo_16000 --compile --no-scan --no-updates
+```
+
+输出分别记录 suffix FO、精确早期参数 VJP、实际 BF16 ZO、用精确方向导数构造的
+随机方向估计，以及 FP32 ZO，包含每卡与平均后范数、夹角和高斯估计器方差预测。
+epsilon 扫描分别使用对应 BF16/FP32 局部映射的自动微分参考，避免混淆精度差异。
+默认数据游标和扰动种子取 `--step`；`--data-step`、`--direction-step` 可分别覆盖。
+结果记录 checkpoint 的训练模式、精确早期/末轮梯度的夹角及各 rank 实际诊断数据
+的 SHA256，用于核对跨 checkpoint 比较是否使用相同 batch。
+
+优化器对照每次恢复同一份权重和优化器状态，另提供清零历史矩的对照；更新仅在
+内存中进行，不保存模型、不恢复正式训练。这里的 `oracle_early_parameters` 只补回
+共享参数的精确早期梯度，prelude 仍使用直接 FO，因此不等同于整个模型的完整 BPTT。
+这些单步对照用于定位梯度/更新方向，不能当作不同 lambda 的收敛对比。
+
+### 从完整 FO checkpoint 测试范数匹配
+
+`norm_match` 是独立的短跑入口：恢复同一份完整 FO 权重、分片优化器状态和数据
+游标，依次运行完整 FO、truncated、若干范数匹配 Hybrid，以及原始 lambda=1
+Hybrid。各分支使用原训练 horizon 的学习率日程，默认各跑 200 步，验证数据相同。
+当前限于两轮循环、末轮 FO、`prelude_mode=none` 和原 world size。
+
+```bash
+# 单批梯度及实际优化器更新方向诊断，不保存权重
+torchrun --standalone --nproc_per_node=8 -m hybrid.diagnose_gradients \
+    --checkpoint-dir /path/to/full_fo/run --step 8000 \
+    --output-dir /path/to/norm_match/diagnostic --compile --no-scan \
+    --match-ratios 1 0.3 0.1
+
+# 六个独立分支，各训练 200 步；输出目录必须为空
+torchrun --standalone --nproc_per_node=8 -m hybrid.norm_match \
+    --checkpoint-dir /path/to/full_fo/run --step 8000 --steps 200 \
+    --output-dir /path/to/norm_match/short_runs --ratios 1 0.3 0.1
+```
+
+对共享参数，先分别累积并跨卡平均末轮 FO 与首轮 ZO，再计算全局 L2 范数：
+
+```text
+effective_lambda = alpha * ||g_FO|| / ||g_ZO||
+g_mixed = g_FO + effective_lambda * g_ZO
+```
+
+`--ratios` 指定 alpha，即缩放后 ZO 范数与 FO 范数的目标比值；不是固定的
+原始 `zo_lambda`。每步动态计算系数，不逐层归一化。共享参数以外保留 suffix
+FO，prelude 的首轮间接梯度不补回。优化器仍为原 MuonH + AdamW；没有增加裁剪。
+范数匹配改变了估计器的统计性质，不能再把缩放后的量称为原首轮梯度的无偏估计。
+
+输出包含每个分支的 `metrics.jsonl`、首批逐 rank SHA256、末步 checkpoint，
+以及总目录的 `manifest.json` 和 `summary.json`。各分支检查初始验证 loss 一致。
+为测量方便，额外保留 ZO 梯度缓冲区并同步共享梯度；此入口不用于显存/吞吐比较。
+范数匹配 checkpoint 带有专门元数据，普通 `hybrid.train` 会拒绝直接续训，以免
+无意中丢失动态缩放规则。此短跑入口本身尚不支持续训。
+
+### 从零预训练的范数匹配
+
+正式入口使用相同的范数匹配实现，并将 `zo_norm_ratio` 写入配置与 checkpoint：
+
+```bash
+# 仍沿用 19,523 步原日程；每 250 步验证、每 2,000 步保存
+bash hybrid/scripts/hybrid_norm_match.sh 1 --save-every 2000 --output-dir /path/to/norm1
+bash hybrid/scripts/hybrid_norm_match.sh 0.3 --save-every 2000 --output-dir /path/to/norm03
+bash hybrid/scripts/hybrid_norm_match.sh 0.1 --save-every 2000 --output-dir /path/to/norm01
+
+# 从正式入口产生的 checkpoint 恢复，比例必须保持一致
+bash hybrid/scripts/hybrid_norm_match.sh 1 --save-every 2000 \
+    --output-dir /path/to/norm1 --resume-step 2000
+```
+
+对应参数为 `--mode hybrid --prelude-mode none --zo-lambda 1 --zo-norm-ratio ALPHA`。
+默认 `zo_norm_ratio=None`，旧模式和旧 checkpoint 的行为不变。启用后要求原始
+`zo_lambda=1`，避免固定权重和目标范数产生歧义。每步日志增加 FO/原始 ZO/缩放后
+ZO 的共享参数范数、FO–ZO cosine 和 `effective_lambda`。从零初始化时边界梯度
+为零，ZO 为零，此时缩放系数定义为零。
+
+两个入口均先平均 FO/ZO，再匹配全体共享参数的范数。额外 ZO 缓冲区和通信仍然
+存在，尚未做显存或通信优化。`grad_norm_local_max` 是混合后各卡梯度缓冲区范数
+的最大值；启用匹配时，共享部分已经跨卡平均，其余参数仍由优化器平均。

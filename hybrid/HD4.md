@@ -1,6 +1,7 @@
 # hd-4 实验机
 
-2026-11-17 准备完成，正式训练尚未启动。以下路径均在远端机器。
+2026-11-17 准备完成并启动正式训练；2026-11-18 按用户要求停止队列，检查 ZO 梯度。
+当前停止状态与诊断结果见本文末尾。以下路径均在远端机器。
 
 | 用途 | 路径 |
 | --- | --- |
@@ -85,7 +86,7 @@ epsilon=1e-3、rho=1、lambda=1，探测精度和扰动幅度可在正式实验�
 
 ## tmux 与停止状态
 
-下载、安装和验收均在独立远端 tmux 会话中执行，准备任务已结束，没有启动正式训练。
+下载、安装和验收均在独立远端 tmux 会话中执行，准备任务已结束。
 后续训练也应在 tmux 中启动。例如进入一个新的会话后加载环境，再选择启动脚本：
 
 ```bash
@@ -96,3 +97,117 @@ source /data_fs/zhangyuxuan/HybridOp/setup/env.sh
 
 Mac 合盖或 SSH 断开不会终止 tmux 中的任务；重新连接后用
 `tmux attach -t hybridop-train` 返回会话。助手需要恢复连接后才能继续查看状态。
+
+## 2026-11-18 停训与梯度诊断
+
+正式实验目录：`/data_fs/zhangyuxuan/HybridOp/experiments/formal_20261117_215621`。
+完整 FO、truncated 均完成 19,523 步，最终 34,560 行验证 loss 分别为
+2.43435、2.50287。Hybrid none 在最后记录约 9,890 步时按用户要求停止；最近
+完整 checkpoint 为 8,000 步。整个队列一起停止，separate/joint_recompute 未启动。
+`status_before_stop.json`、`stop_request.json` 和 `status.json` 保存停止记录。
+
+诊断目录：`/data_fs/zhangyuxuan/HybridOp/diagnostics/gradient_20261118_103632`。
+使用 Hybrid none 的 8,000 步 checkpoint、下一批真实数据、8 卡 × 8 次累积，
+完整重放 262,144 tokens；eager 和 compiled 两次检查均成功。仅保存 JSON 指标，
+优化器反事实更新只在内存中进行，没有覆盖 checkpoint 或恢复正式训练。
+
+编译路径下，8 卡平均后的共享参数 suffix FO 范数为 0.5294，精确早期参数 VJP
+为 0.01558，BF16 ZO 为 65.084。用精确方向导数构造同样的高斯随机方向估计，
+范数仍为 65.302；FP32 差分为 65.335。BF16 ZO 与精确早期 VJP 的 cosine
+约 0.000311。被扰动的共享参数共 102,777,856 维，每次更新仅 64 个独立方向
+（每卡、每个 microbatch 一个方向，分别作用于不同数据）。由精确 microbatch
+梯度计算的高斯估计器 RMS 范数预测为 62.526，与实测一致到采样波动量级。
+
+这些结果支持高维随机方向估计的方差是当前主要问题；未发现累积/跨卡平均漏除
+系数。BF16 在默认 epsilon 下的差分误差相对次要，单独改 FP32 不能消除该噪声。
+eager 优化器对照中，恢复同一历史状态后，精确早期参数梯度与实际 ZO 的共享参数
+更新范数约为 1.221 / 1.224，但方向 cosine 约 0.739。清零历史矩以隔离当步梯度
+后，cosine 降至约 0.000692，显示 MuonH 控制模长并不保证估计方向可靠。
+该诊断限定于这个 checkpoint 和一个 batch，不能当作 lambda 收敛实验。
+
+原始结果位于上述诊断目录下的 `eager/summary.json`、`compiled/summary.json`。
+
+### 完整 FO checkpoint 对照
+
+2026-11-18 追加检查，目录：
+`/data_fs/zhangyuxuan/HybridOp/diagnostics/fo_checkpoint_20261118_105446`。
+读取 full_fo 的 8,000 和 16,000 步权重，统一使用 8,000 步后的一个完整 batch，
+并固定 direction_step=8000、epsilon=1e-3、8 卡 × 8 次累积、编译模式。
+已核对 FO/Hybrid 的 8,000 步每卡数据游标相同；两次 FO 检查实际输入的逐 rank
+SHA256 完全一致。两次诊断退出码均为 0，没有运行 optimizer.step 或保存权重。
+
+下表为 8 卡平均后的首轮共享参数梯度；“精确导数 ZO”表示使用精确方向导数、
+但仍乘回随机方向来构造估计，不包含有限差分误差。
+
+| checkpoint | 精确首轮梯度范数 | BF16 ZO 范数 | 精确导数 ZO 范数 | ZO 与精确首轮梯度 cosine |
+| --- | ---: | ---: | ---: | ---: |
+| Hybrid none / 8,000 | 0.01558 | 65.08 | 65.30 | 0.000311 |
+| 完整 FO / 8,000 | 0.07857 | 755.76 | 762.14 | 0.000292 |
+| 完整 FO / 16,000 | 0.08969 | 859.68 | 861.02 | 0.000176 |
+
+FO 的 FP32 ZO 范数分别为 758.93、856.82；高斯估计器预测 RMS 范数分别为
+666.75、823.47。各 microbatch 精确首轮梯度平方范数的均值，相对于全局均值梯度
+平方范数的比值，Hybrid 为 10.03，FO 两个 checkpoint 为 44.85、52.49。
+完整 FO 训练并未在这两个 checkpoint 上消除当前估计器的高方差，且首轮梯度
+与 microbatch 差异更大，使绝对噪声范数更大。这里仅比较一个固定 batch 的梯度，
+尚未测试从 FO checkpoint 切换 ZO 后的长期收敛。
+
+完整数据见 `comparison.json`、`full_fo_8000/summary.json`、
+`full_fo_16000/summary.json`。诊断结束后所有 GPU 已释放，正式队列仍停止。
+
+## 2026-11-18 范数匹配：短跑与从零训练
+
+短跑目录：`/data_fs/zhangyuxuan/HybridOp/experiments/norm_match_20261118_110722`。
+六组均恢复完整 FO 的 8,000 步权重、分片优化器状态和数据游标，各跑 200 步，
+保留原 19,523 步学习率日程。所有分支的初始验证 loss 和首批逐 rank SHA256
+一致；每组在 0/50/100/200 步评估固定 4,992 行。退出码为 0，权重单独保存，
+没有覆盖原正式实验。初始验证 loss 为 2.64948813。
+
+| 分支 | 200 步后验证 loss |
+| --- | ---: |
+| 完整 FO | 2.64685859 |
+| truncated | 2.67375932 |
+| ZO/FO 范数比 1 | 2.64864058 |
+| ZO/FO 范数比 0.3 | 2.65357118 |
+| ZO/FO 范数比 0.1 | 2.65615631 |
+| 原始 Hybrid，lambda=1 | 2.69428793 |
+
+范数匹配在这个短跑中优于原始 Hybrid 和 truncated，但没有优于完整 FO；比值 1
+在第 50 步一度低于完整 FO，200 步时优势未保持。单个 seed、200 步和 FO checkpoint
+切换不能支持从零预训练或长期收敛的结论。原始记录在 `short_runs/*/metrics.jsonl`，
+汇总在 `short_runs/summary.json`，核对记录为 `verification.json`，曲线为 `short_runs.png`。
+
+本仓库也归档了本次短跑的[结果汇总](results/20261118_norm_match/summary.json)、
+[梯度诊断](results/20261118_norm_match/gradient_diagnostic.json)和
+[验证曲线](results/20261118_norm_match/short_runs.png)。同目录下的 `manifest.json`
+记录运行配置，各分支子目录保存 `metrics.jsonl` 和首批数据 SHA256；不包含权重或数据集。
+
+单批诊断在 `diagnostic/summary.json`。共享参数 FO 范数 0.18557、首轮精确梯度
+0.07858、ZO 范数 755.55；等范数匹配的有效 lambda 为 2.456e-4。
+若以无偏高斯估计模型下的梯度均方误差为目标，利用各 microbatch 精确梯度计算
+的 ZO RMS 666.75，最优固定 lambda 约为 1.39e-8，对应 ZO/FO 范数比约 5e-5。
+这是该 batch 的梯度估计诊断，不是 MuonH 训练 loss 的最优超参；范数匹配本身也
+不保持原估计器的无偏性。64 个方向来自 8 卡 × 8 次累积，各 microbatch 一个方向，
+不是同一批数据探测 64 次；每个 microbatch 仍只有两次首轮循环探测前向。
+
+用户决定改为原日程的从零训练。新实验目录：
+`/data_fs/zhangyuxuan/HybridOp/experiments/norm_pretrain_20261118_112549`。
+tmux 为 `hybridop-norm-pretrain`，依次运行 `norm_match_1`、`norm_match_0.3`、
+`norm_match_0.1`，每组 19,523 步、每 250 步验证、每 2,000 步保存。
+首组已启动，初始验证 loss 10.373580708717688 与原 FO/truncated 完全一致，
+首步训练 loss 也与 FO 一致；启动验收时已检查到 100 步，数值有限，日志中缩放后
+ZO 范数满足目标比例。这是启动时记录，后续进度以服务器上的 `status.json` 为准。
+初始化首步边界梯度与 ZO 均为零，缩放系数为零。
+
+保留 seed=42、模型/数据/优化器/原学习率日程、epsilon=1e-3、每卡每 microbatch
+一个方向、prelude_mode=none。FO/truncated 复用原从零训练结果，未重新运行。
+`checks/baseline_comparison.json` 记录配置及核心文件一致性；43 项 CPU/配置/续训
+检查和两卡混合梯度/更新检查通过，日志在 `checks/`。源码快照及哈希分别在
+`source/` 和 `manifest.json`，队列状态在 `status.json`，各分支日志和 checkpoint
+在 `<分支>/console.log`、`<分支>/run/`。入口位置记录于
+`/data_fs/zhangyuxuan/HybridOp/setup/latest_norm_pretrain_experiment.txt`。
+
+正式入口为 `hybrid/scripts/hybrid_norm_match.sh`，支持 checkpoint 续训；新增比例
+写入 `user_config.zo_norm_ratio`。此实现额外保留 ZO 梯度缓冲区并先平均共享 FO/ZO，
+尚未优化额外通信，不能把短跑耗时当作最优实现的吞吐比较。所有权重、日志和缓存
+仍在 `/data_fs/zhangyuxuan/HybridOp` 下；原正式实验队列保持停止。

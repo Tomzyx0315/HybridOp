@@ -1,0 +1,85 @@
+{
+  "source": "/data_fs/zhangyuxuan/HybridOp/experiments/formal_20261117_215621/full_fo/run",
+  "source_step": 8000,
+  "steps": 200,
+  "variants": [
+    [
+      "full_fo",
+      "full_fo",
+      null
+    ],
+    [
+      "truncated",
+      "truncated",
+      null
+    ],
+    [
+      "norm_match_1",
+      "hybrid",
+      1.0
+    ],
+    [
+      "norm_match_0.3",
+      "hybrid",
+      0.3
+    ],
+    [
+      "norm_match_0.1",
+      "hybrid",
+      0.1
+    ],
+    [
+      "hybrid_raw",
+      "hybrid",
+      null
+    ]
+  ],
+  "base_config": {
+    "mode": "full_fo",
+    "size": 16,
+    "aspect_ratio": 64,
+    "head_dim": 128,
+    "sequence_len": 2048,
+    "vocab_size": 32001,
+    "n_prelude": 2,
+    "n_recur_block": 8,
+    "n_coda": 2,
+    "num_recur": 2,
+    "fo_loops": 1,
+    "total_batch_size": 262144,
+    "device_batch_size": 2,
+    "num_iterations": -1,
+    "target_param_data_ratio": 20,
+    "embedding_lr": 0.3,
+    "unembedding_lr": 0.004,
+    "matrix_lr": 0.014,
+    "warmup_ratio": 0,
+    "warmdown_ratio": 1,
+    "final_lr_frac": 0.1,
+    "zo_epsilon": 0.001,
+    "zo_lambda": 1.0,
+    "zo_directions": 1,
+    "zo_seed": 12345,
+    "zo_probe_dtype": "bf16",
+    "prelude_mode": "none",
+    "zo_rho": 1.0,
+    "seed": 42,
+    "device": "cuda",
+    "compile": true,
+    "data_dir": "",
+    "output_dir": "/autodl-fs/data/zhangyuxuan/HybridOp/experiments/formal_20261117_215621/full_fo/run",
+    "run": "dummy",
+    "eval_every": 250,
+    "eval_rows": 4992,
+    "final_eval_rows": 34560,
+    "save_every": 2000,
+    "log_every": 10,
+    "resume_step": -1,
+    "stop_after": -1,
+    "synthetic_data": false,
+    "dry_run": false
+  },
+  "world_size": 8,
+  "matching": "global shared-parameter L2 norms, after rank averaging",
+  "optimizer_history": "restored identically from full FO checkpoint"
+}

@@ -12,8 +12,8 @@ from hybrid.config import PRELUDE_MODES
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("prelude_mode", PRELUDE_MODES)
-def test_resumed_hybrid_matches_uninterrupted(tmp_path, prelude_mode):
+@pytest.mark.parametrize("prelude_mode,norm_ratio", [(p, None) for p in PRELUDE_MODES] + [("none", 0.3)])
+def test_resumed_hybrid_matches_uninterrupted(tmp_path, prelude_mode, norm_ratio):
     root = Path(__file__).resolve().parents[2]
     common = [sys.executable, "-m", "hybrid.train", "--mode", "hybrid", "--device", "cpu",
               "--synthetic-data", "--no-compile", "--size", "1", "--aspect-ratio", "16",
@@ -21,6 +21,8 @@ def test_resumed_hybrid_matches_uninterrupted(tmp_path, prelude_mode):
               "--n-prelude", "1", "--n-recur-block", "1", "--n-coda", "1",
               "--device-batch-size", "1", "--total-batch-size", "16", "--num-iterations", "4",
               "--eval-every", "-1", "--log-every", "1", "--prelude-mode", prelude_mode]
+    if norm_ratio is not None:
+        common += ["--zo-norm-ratio", str(norm_ratio)]
     env = {k: v for k, v in os.environ.items() if k not in {"RANK", "LOCAL_RANK", "WORLD_SIZE"}}
     env["OMP_NUM_THREADS"] = "1"
     def run(directory, extra=()):

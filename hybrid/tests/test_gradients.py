@@ -119,6 +119,33 @@ def test_hybrid_combines_gradients_before_optimizer():
         torch.testing.assert_close(p.grad, dict(reference.named_parameters())[name].grad)
 
 
+@pytest.mark.parametrize("ratio", [None, 0.0, 0.1, 1.0])
+def test_separated_norm_matching_preserves_accumulation_and_outer_gradients(ratio):
+    from hybrid.norm_matching import mix_shared_gradients, separated_backward
+    cfg, model, x, y = tiny()
+    cfg = replace(cfg, zo_directions=2)
+    raw, truncated = copy.deepcopy(model), copy.deepcopy(model)
+    buffers = {n: torch.zeros_like(p) for n, p in model.shared_named_parameters()}
+    for micro in range(2):
+        batch = x.roll(micro, dims=1)
+        backward(raw, batch, y, cfg, micro=micro, accum=2)
+        backward(truncated, batch, y, replace(cfg, mode="truncated"), micro=micro, accum=2)
+        separated_backward(model, batch, y, cfg, buffers, step=7, micro=micro,
+                           rank=0, accumulation=2)
+    metrics = mix_shared_gradients(model, buffers, ratio)
+    shared = dict(model.shared_named_parameters())
+    for n, p in model.named_parameters():
+        if ratio is None or n not in shared:
+            torch.testing.assert_close(p.grad, dict(raw.named_parameters())[n].grad)
+        elif ratio == 0:
+            torch.testing.assert_close(p.grad, dict(truncated.named_parameters())[n].grad, rtol=0, atol=0)
+    if ratio is not None:
+        corrections = [(p.grad - dict(truncated.named_parameters())[n].grad).square().sum()
+                       for n, p in shared.items()]
+        measured = sum(corrections).sqrt().item()
+        assert measured == pytest.approx(ratio * metrics["fo_shared_norm"], abs=1e-7, rel=1e-5)
+
+
 @pytest.mark.parametrize("prelude_mode", PRELUDE_MODES)
 def test_accumulation_is_normalized_once(prelude_mode):
     cfg, model, x, y = tiny()

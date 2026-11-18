@@ -11,18 +11,20 @@ import torch.distributed as dist
 
 from hybrid.config import Config, PRELUDE_MODES, recipe
 from hybrid.model import ExperimentGPT
+from hybrid.norm_matching import mix_shared_gradients, separated_backward
 from hybrid.steps import backward_microbatch
 from hybrid.train import build_optimizer, model_config
 from nanochat.common import compute_cleanup, compute_init
 from nanochat.optim import MuonAdamW
 
 
-def check_variant(prelude_mode, rank, world, device):
+def check_variant(prelude_mode, rank, world, device, norm_ratio=None):
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     cfg = Config(mode="hybrid", prelude_mode=prelude_mode, size=1, aspect_ratio=32,
                  head_dim=8, sequence_len=8, vocab_size=64, n_prelude=1, n_recur_block=1, n_coda=1,
-                 device_batch_size=1, total_batch_size=8 * world, num_iterations=4, compile=False)
+                 device_batch_size=1, total_batch_size=8 * world, num_iterations=4, compile=False,
+                 zo_norm_ratio=norm_ratio)
     model = ExperimentGPT(model_config(cfg)).to(device)
     model.init_weights()
     with torch.no_grad():
@@ -45,7 +47,25 @@ def check_variant(prelude_mode, rank, world, device):
         gen = torch.Generator(device=device).manual_seed(200 + rank + step * world)
         x = torch.randint(cfg.vocab_size, (1, 8), device=device, generator=gen)
         y = torch.randint(cfg.vocab_size, (1, 8), device=device, generator=gen)
-        backward_microbatch(model, x, y, cfg, step=step, micro_step=0, rank=rank, accumulation_steps=1)
+        if norm_ratio is None:
+            backward_microbatch(model, x, y, cfg, step=step, micro_step=0, rank=rank, accumulation_steps=1)
+        else:
+            buffers = {n: torch.zeros_like(p) for n, p in model.shared_named_parameters()}
+            separated_backward(model, x, y, cfg, buffers, step=step, micro=0, rank=rank, accumulation=1)
+            # Build an independent average-then-scale reference before the helper
+            # mutates either buffer. The optimizer must not divide by world twice.
+            averaged_fo, averaged_zo = {}, {}
+            for n, p in model.shared_named_parameters():
+                averaged_fo[n], averaged_zo[n] = p.grad.clone(), buffers[n].clone()
+                for tensor in (averaged_fo[n], averaged_zo[n]):
+                    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+                    tensor.div_(world)
+            fo_norm = sum(g.double().square().sum() for g in averaged_fo.values()).sqrt()
+            zo_norm = sum(g.double().square().sum() for g in averaged_zo.values()).sqrt()
+            scale = (norm_ratio * fo_norm / zo_norm).item() if zo_norm else 0.0
+            mix_shared_gradients(model, buffers, norm_ratio)
+            for n, p in model.shared_named_parameters():
+                torch.testing.assert_close(p.grad, averaged_fo[n] + scale * averaged_zo[n])
         for name, p in model.named_parameters():
             averaged = p.grad.clone()
             dist.all_reduce(averaged, op=dist.ReduceOp.SUM)
@@ -62,20 +82,23 @@ def check_variant(prelude_mode, rank, world, device):
         model.zero_grad(set_to_none=True)
         reference.zero_grad(set_to_none=True)
     if rank == 0:
-        print(f"PASS {prelude_mode}: distributed FO+ZO averaging, single update, identical rank parameters")
+        print(f"PASS {prelude_mode}, norm_ratio={norm_ratio}: averaging, single update, identical rank parameters")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prelude-mode", choices=["all", *PRELUDE_MODES], default="all")
+    parser.add_argument("--norm-ratio", type=float)
     args = parser.parse_args()
     _, rank, _, world, device = compute_init("cuda")
     try:
         if world < 2:
             raise ValueError("Launch with at least two GPU ranks")
         torch._dynamo.config.disable = True
-        for mode in PRELUDE_MODES if args.prelude_mode == "all" else [args.prelude_mode]:
-            check_variant(mode, rank, world, device)
+        modes = (["none"] if args.norm_ratio is not None else
+                 (PRELUDE_MODES if args.prelude_mode == "all" else [args.prelude_mode]))
+        for mode in modes:
+            check_variant(mode, rank, world, device, args.norm_ratio)
     finally:
         compute_cleanup()
 

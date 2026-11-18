@@ -78,11 +78,14 @@ def load_rank_state(directory, step, rank):
 
 
 def validate_resume(cfg, meta, world_size):
+    if meta.get("norm_match_experiment", {}).get("ratio") is not None:
+        raise ValueError("This short-fork checkpoint stores norm matching outside user_config; resume from a hybrid.train checkpoint instead")
     if meta["world_size"] != world_size:
         raise ValueError("Resuming a sharded optimizer requires the original world size")
     allowed = {"output_dir", "data_dir", "resume_step", "stop_after", "eval_every", "eval_rows",
                "final_eval_rows", "save_every", "log_every", "run", "dry_run", "compile"}
     saved_config = dict(meta["user_config"])
+    saved_config.setdefault("zo_norm_ratio", None)
     # Checkpoints from the original Hybrid implementation predate these fields.
     saved_config.setdefault("prelude_mode", "none")
     if "zo_rho" not in saved_config:
@@ -105,6 +108,7 @@ def run_training(cfg, resolved):
     import torch.distributed as dist
     from hybrid.model import ExperimentGPT, training_precision
     from hybrid.steps import backward_microbatch, estimated_flops_per_token
+    from hybrid.norm_matching import mix_shared_gradients, separated_backward
     from nanochat.checkpoint_manager import load_checkpoint, save_checkpoint
     from nanochat.common import compute_cleanup, compute_init, get_base_dir, print0
     from nanochat.dataloader import prepacked_data_loader, prepacked_eval_loader
@@ -172,6 +176,8 @@ def run_training(cfg, resolved):
         if end_step <= start_step:
             raise ValueError("No remaining steps; stop_after is an absolute optimizer-step limit")
         accumulation = resolved["grad_accum_steps"]
+        zo_buffers = ({name: torch.zeros_like(p) for name, p in model.shared_named_parameters()}
+                      if cfg.zo_norm_ratio is not None else None)
         reports_input_zo = cfg.mode == "hybrid" and cfg.prelude_mode != "none" and cfg.zo_lambda != 0
         flops_per_token = estimated_flops_per_token(model, cfg)
         resolved = {**resolved, "estimated_flops_per_token": flops_per_token,
@@ -238,18 +244,28 @@ def run_training(cfg, resolved):
             input_abs = torch.zeros((), device=device)
             input_norm = torch.zeros((), device=device)
             direct_norm = torch.zeros((), device=device)
+            if zo_buffers is not None:
+                for buffer in zo_buffers.values():
+                    buffer.zero_()
             for micro in range(accumulation):
                 x, y, loader_state = next(train_loader)
-                loss, extra = backward_microbatch(model, x, y, cfg, step=step, micro_step=micro,
-                                                   rank=rank, accumulation_steps=accumulation)
+                if zo_buffers is None:
+                    loss, extra = backward_microbatch(model, x, y, cfg, step=step, micro_step=micro,
+                                                       rank=rank, accumulation_steps=accumulation)
+                else:
+                    loss, extra = separated_backward(model, x, y, cfg, zo_buffers, step=step,
+                        micro=micro, rank=rank, accumulation=accumulation, return_metrics=True)
                 loss_sum += loss / accumulation
                 zo_abs += extra.get("zo_directional_abs", 0) / accumulation
                 boundary_norm += extra.get("boundary_grad_norm", 0) / accumulation
                 input_abs += extra.get("zo_input_directional_abs", 0) / accumulation
                 input_norm += extra.get("zo_input_grad_norm", 0) / accumulation
                 direct_norm += extra.get("prelude_direct_grad_norm", 0) / accumulation
-            # No DDP wrapper / extra gradient all-reduce: DistMuonAdamW averages
-            # the COMPLETE accumulated FO+ZO gradients inside optimizer.step().
+            match_metrics = (mix_shared_gradients(model, zo_buffers, cfg.zo_norm_ratio)
+                             if zo_buffers is not None else {})
+            # Ordinary modes average the complete gradient inside the optimizer.
+            # Norm matching first averages the shared FO/ZO buffers separately;
+            # their identical mixed replicas are preserved by the optimizer AVG.
             squared_norm = torch.zeros((), device=device)
             for parameter in model.parameters():
                 if parameter.grad is None:
@@ -296,7 +312,8 @@ def run_training(cfg, resolved):
                           lr_matrix=optimizer.param_groups[3]["lr"],
                           lr_embedding=optimizer.param_groups[1]["lr"],
                           zo_epsilon=cfg.zo_epsilon, zo_input_epsilon=cfg.zo_input_epsilon, zo_rho=cfg.zo_rho,
-                          zo_lambda=cfg.zo_lambda))
+                          zo_lambda=cfg.zo_lambda, zo_norm_ratio=cfg.zo_norm_ratio,
+                          **match_metrics))
             final = completed == end_step
             if cfg.eval_every > 0 and (completed % cfg.eval_every == 0 or final):
                 evaluate(completed, final=completed == steps)

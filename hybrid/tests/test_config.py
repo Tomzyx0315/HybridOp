@@ -75,6 +75,25 @@ class RecipeTests(unittest.TestCase):
     def test_pilot_does_not_change_lr_or_horizon(self):
         self.assertEqual(recipe(Config(stop_after=100), 8), recipe(Config(), 8))
 
+    def test_norm_matching_configuration_and_resume(self):
+        from hybrid.train import validate_resume
+        cfg = parse_args(["--mode", "hybrid", "--zo-norm-ratio", "0.3"])
+        self.assertEqual(cfg.zo_norm_ratio, 0.3)
+        self.assertEqual(recipe(cfg, 8), recipe(Config(), 8))
+        self.assertIn("_norm0.3_", default_run_name(cfg))
+        meta = {"world_size": 8, "user_config": asdict(cfg)}
+        validate_resume(replace(cfg, resume_step=2000), meta, 8)
+        with self.assertRaisesRegex(ValueError, "zo_norm_ratio"):
+            validate_resume(replace(cfg, zo_norm_ratio=1), meta, 8)
+        old = asdict(Config())
+        del old["zo_norm_ratio"]
+        validate_resume(Config(), {"world_size": 8, "user_config": old}, 8)
+        for invalid in (replace(cfg, zo_norm_ratio=-1), replace(cfg, zo_norm_ratio=float("nan")),
+                        replace(cfg, mode="full_fo"), replace(cfg, prelude_mode="joint"),
+                        replace(cfg, zo_lambda=0.1)):
+            with self.assertRaises(ValueError):
+                invalid.validate()
+
     def test_default_schedule_is_linear(self):
         cfg = Config()
         self.assertEqual(lr_multiplier(0, 100, cfg), 1)

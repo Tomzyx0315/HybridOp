@@ -37,6 +37,7 @@ class Config:
     final_lr_frac: float = 0.1
     zo_epsilon: float = 1e-3
     zo_lambda: float = 1.0
+    zo_norm_ratio: float | None = None
     zo_directions: int = 1
     zo_seed: int = 12345
     zo_probe_dtype: str = "bf16"
@@ -92,6 +93,11 @@ class Config:
                 raise ValueError(f"{key} must be finite and positive")
         if not math.isfinite(self.zo_lambda) or self.zo_lambda < 0:
             raise ValueError("zo_lambda must be finite and nonnegative")
+        if self.zo_norm_ratio is not None:
+            if not math.isfinite(self.zo_norm_ratio) or self.zo_norm_ratio < 0:
+                raise ValueError("zo_norm_ratio must be finite and nonnegative")
+            if self.mode != "hybrid" or self.prelude_mode != "none" or self.zo_lambda != 1:
+                raise ValueError("Norm matching requires hybrid, prelude_mode=none, zo_lambda=1")
         if not (0 <= self.warmup_ratio <= 1 and 0 <= self.warmdown_ratio <= 1
                 and self.warmup_ratio + self.warmdown_ratio <= 1):
             raise ValueError("Invalid warmup/warmdown fractions")
@@ -111,6 +117,8 @@ def default_run_name(cfg: Config):
     name = f"loop{cfg.num_recur}_s{cfg.size}_{cfg.mode}"
     if cfg.mode == "hybrid" and cfg.prelude_mode != "none":
         name += f"_prelude_{cfg.prelude_mode}"
+    if cfg.zo_norm_ratio is not None:
+        name += f"_norm{cfg.zo_norm_ratio:g}"
     return f"{name}_seed{cfg.seed}"
 
 
@@ -122,6 +130,7 @@ def execution_plan(cfg: Config):
                 extra_prelude_forwards=int(active and cfg.prelude_mode == "joint_recompute"),
                 prelude_backwards=1,
                 zo_rho=cfg.zo_rho, zo_input_epsilon=cfg.zo_input_epsilon,
+                zo_norm_ratio=cfg.zo_norm_ratio,
                 output_name=default_run_name(cfg))
 
 
@@ -219,12 +228,14 @@ def parse_args(argv=None):
         if isinstance(default, bool):
             kwargs["action"] = argparse.BooleanOptionalAction
         else:
-            kwargs["type"] = type(default)
+            kwargs["type"] = float if field.name == "zo_norm_ratio" else type(default)
         if field.name in choices:
             kwargs["choices"] = choices[field.name]
         target = input_scale if field.name == "zo_rho" else parser
         if field.name == "zo_rho":
             kwargs["help"] = "Input/parameter perturbation ratio; input epsilon = rho * zo epsilon (default: 1)"
+        if field.name == "zo_norm_ratio":
+            kwargs["help"] = "Match global ZO norm to this multiple of shared suffix FO norm (default: disabled)"
         target.add_argument("--" + field.name.replace("_", "-"), **kwargs)
     namespace = vars(parser.parse_args(argv))
     namespace.pop("config")
