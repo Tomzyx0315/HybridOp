@@ -389,3 +389,102 @@ ZO 的共享参数范数、FO–ZO cosine 和 `effective_lambda`。从零初始�
 两个入口均先平均 FO/ZO，再匹配全体共享参数的范数。额外 ZO 缓冲区和通信仍然
 存在，尚未做显存或通信优化。`grad_norm_local_max` 是混合后各卡梯度缓冲区范数
 的最大值；启用匹配时，共享部分已经跨卡平均，其余参数仍由优化器平均。
+
+### 从完整 FO 渐进切换，并继续到原训练终点
+
+`fo_transition.sh` 从指定完整 FO checkpoint 恢复权重、分片优化器、RNG 和数据游标，
+在新输出目录训练。默认从 8,000 步开始，用 1,000 次更新过渡，仍在原定 19,523 步
+结束；学习率日程不重启。完整 FO 原训练曲线作为参考，另运行渐变 truncated 和
+三个渐变 norm ZO 分支：
+
+```bash
+bash hybrid/scripts/fo_transition.sh truncated /path/to/full_fo/run \
+    --save-every 2000 --output-dir /path/to/fo_to_truncated
+bash hybrid/scripts/fo_transition.sh 1 /path/to/full_fo/run \
+    --save-every 2000 --output-dir /path/to/fo_to_norm1
+# 将第一个参数改成 0.3 / 0.1，分别启动另外两组。
+
+# 从新分支自己的 checkpoint 恢复；原 fork 参数和 transition_steps 必须相同。
+bash hybrid/scripts/fo_transition.sh 1 /path/to/full_fo/run \
+    --save-every 2000 --output-dir /path/to/fo_to_norm1 --resume-step 10000
+```
+
+可用 `--fo-checkpoint-step`、`--transition-steps` 覆盖默认值。过渡长度 N≥2 时，
+第一个恢复更新的 s=0，最后一个过渡更新的 s=1：默认第 8,001 步更新完全为 FO，
+第 9,000 步更新已经完全使用目标梯度。`--transition-steps 0` 表示立即切换。
+
+对共享参数，记 f 为末轮精确梯度、h 为首轮精确梯度、z 为首轮局部 ZO：
+
+```text
+truncated:  g = f + (1-s) * h
+norm ZO:    g = f + (1-s) * h + s * alpha * ||f|| / ||z|| * z
+```
+
+范数基准始终是跨卡平均后的纯末轮 FO；保留的首轮精确梯度不进入分母或基准。
+prelude/embedding 的首轮间接梯度也乘 (1-s)，直接路径梯度保留。这样整个模型
+在 s=0 时等于完整 FO，在 s=1 时等于原 truncated 或 `hybrid/none` 范数匹配模式。
+各项先混合，再由同一个原优化器更新一次。
+
+中间阶段使用固定边界 cotangent 重算首轮精确 VJP，并重算 prelude 来合并直接和
+间接输入梯度；另保留一个共享参数精确梯度缓冲区。该阶段计算量会增加，日志的
+FLOPs 估计计入重算和首轮 FO 部分。过渡结束后释放精确梯度缓冲区，恢复目标模式
+的执行路径。checkpoint 保存固定的过渡起点与长度，恢复时不会重新开始渐变。
+
+验收覆盖：全模型梯度与完整 FO/目标梯度凸组合一致（含 prelude）、两端路径、
+梯度累积、原 checkpoint 不变，以及跨过过渡终点的断点续训一致性。
+
+### 配对复现与训练故障记录
+
+独立种子的复现应同时重跑 truncated 对照。以下两组初始化种子均为 43，数据
+顺序保持原固定 parquet 顺序；ZO 方向种子改为 12346。其余配置保留原日程：
+
+```bash
+bash hybrid/scripts/launch.sh truncated --seed 43 --zo-seed 12346 \
+    --save-every 2000 --output-dir /path/to/seed43_truncated
+bash hybrid/scripts/hybrid_norm_match.sh 0.1 --seed 43 --zo-seed 12346 \
+    --save-every 2000 --output-dir /path/to/seed43_norm01
+```
+
+单个 rank 出错时，训练入口先打印原始异常，再退出，由 torchrun 终止其他进程；
+失败路径不调用需要其他 rank 共同参与的 NCCL 清理。正常结束仍执行原清理流程。
+这避免将显存不足等原始错误掩盖成十分钟后的通信超时。
+
+可选的卡住诊断只记录调用栈，不改变梯度和训练配置：
+
+```bash
+export HYBRID_STALL_SECONDS=180
+export HYBRID_DIAGNOSTICS_DIR=/path/to/run_diagnostics
+```
+
+成功更新、验证或保存后会重置计时；超过设定时间无进展时，各 rank 在独立文件
+记录 Python 调用栈。目录应放在训练输出目录外，以免触发非空输出目录保护。
+默认关闭。两卡错误退出回归检查：
+
+```bash
+python -m hybrid.tests.distributed_failure_check --output-dir /path/to/failure_check
+```
+
+该检查故意让 rank 0 报错，要求在 120 秒内退出并保留原异常，且不进入失败 rank
+的 collective cleanup。检查的子训练进程应失败，检查程序本身通过后退出码为 0。
+
+### 等待 GPU 空闲后运行
+
+`hybrid.wait_for_gpus` 默认每 180 秒查询一次指定 GPU，连续两次同时满足以下
+条件才启动命令：无计算进程、每卡已用显存不超过 256 MiB、利用率不超过 5%。
+任一 GPU 不满足条件即重置连续计数；查询失败、超时、缺卡或指标为 N/A 时继续
+等待。命令通过检查到的 GPU UUID 绑定物理卡。文件锁防止本队列重复启动。
+
+```bash
+python -m hybrid.wait_for_gpus \
+    --state-file /path/to/gpu_wait.json --lock-file /path/to/shared_queue.lock \
+    -- bash hybrid/scripts/hybrid_norm_match.sh 0.1 --seed 43 --zo-seed 12346 \
+       --save-every 2000 --output-dir /path/to/seed43_norm01
+```
+
+`hybrid.experiment_queue --experiment-dir DIR` 按 DIR/manifest.json 顺序运行实验，
+每个实验启动前都使用相同空闲检查；一个实验正常结束且最终 checkpoint 完整后
+才启动下一个，失败则停止队列。轮询状态保存在分支的 `gpu_wait.json` 和总目录
+的 `status.json`。状态、日志与训练输出均可放在数据盘。
+
+空闲检查不是机器级 GPU 预约；其他账户仍可能在检查后启动任务。脚本不会结束
+其他用户的进程，也不会在失败后自动跳过实验或修改训练超参数。

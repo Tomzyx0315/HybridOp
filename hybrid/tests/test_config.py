@@ -9,7 +9,7 @@ import unittest
 from dataclasses import asdict, replace
 
 from hybrid.config import (PRELUDE_MODES, Config, default_run_name, execution_plan,
-                           lr_multiplier, normalize_zo_settings, parse_args, recipe)
+                           lr_multiplier, normalize_zo_settings, parse_args, recipe, transition_fraction)
 
 
 class RecipeTests(unittest.TestCase):
@@ -93,6 +93,37 @@ class RecipeTests(unittest.TestCase):
                         replace(cfg, zo_lambda=0.1)):
             with self.assertRaises(ValueError):
                 invalid.validate()
+
+    def test_fo_fork_schedule_and_validation(self):
+        from hybrid.train import validate_fo_fork, validate_resume
+        cfg = parse_args(["--mode", "hybrid", "--zo-norm-ratio", "0.3",
+                          "--fo-checkpoint-dir", "/source", "--fo-checkpoint-step", "8000",
+                          "--transition-steps", "1000"])
+        resolved = recipe(cfg, 8)
+        self.assertEqual(resolved, recipe(Config(), 8))
+        self.assertEqual(transition_fraction(8000, cfg), 0)
+        self.assertAlmostEqual(transition_fraction(8500, cfg), 500 / 999)
+        self.assertEqual(transition_fraction(8999, cfg), 1)
+        self.assertEqual(transition_fraction(9001, cfg), 1)
+        self.assertEqual(transition_fraction(8000, replace(cfg, transition_steps=0)), 1)
+        source = {"world_size": 8, "step": 8000, "user_config": asdict(Config()), "resolved": resolved}
+        validate_fo_fork(cfg, source, 8, resolved)
+        own = {"world_size": 8, "user_config": asdict(cfg)}
+        validate_resume(replace(cfg, resume_step=8500), own, 8)
+        with self.assertRaisesRegex(ValueError, "transition_steps"):
+            validate_resume(replace(cfg, transition_steps=2000), own, 8)
+        for bad in (replace(cfg, fo_checkpoint_step=7000), replace(cfg, seed=43)):
+            with self.assertRaises(ValueError):
+                validate_fo_fork(bad, source, 8, recipe(bad, 8))
+        for bad in (replace(cfg, fo_checkpoint_dir=""), replace(cfg, transition_steps=1),
+                    replace(cfg, mode="full_fo"), replace(cfg, zo_norm_ratio=None),
+                    replace(cfg, transition_steps=20000)):
+            with self.assertRaises(ValueError):
+                recipe(bad, 8)
+        old = asdict(Config())
+        for key in ("fo_checkpoint_dir", "fo_checkpoint_step", "transition_steps"):
+            del old[key]
+        validate_resume(Config(), {"world_size": 8, "user_config": old}, 8)
 
     def test_default_schedule_is_linear(self):
         cfg = Config()

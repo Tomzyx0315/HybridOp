@@ -1,0 +1,165 @@
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+Flash Attention backend: SDPA (PyTorch fallback)
+2026-11-19 05:13:32,943 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 8
+Padding vocab_size from 32001 to 32064 for efficiency
+Scaling the LR for the AdamW parameters ∝1/√(1024/640) = 0.790569
+{
+  "mode": "truncated",
+  "output": "/autodl-fs/data/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233/truncated/run",
+  "total_parameters": 218786816,
+  "effective_parameters": 255896576,
+  "width": 1024,
+  "n_heads": 8,
+  "effective_depth": 20,
+  "num_iterations": 19523,
+  "target_tokens": 5117931520,
+  "actual_tokens": 5117837312,
+  "grad_accum_steps": 8,
+  "reference_tokens": 606380800,
+  "batch_lr_scale": 1.0,
+  "data_lr_scale": 0.5053221214740707,
+  "initial_lrs": {
+    "matrix": 0.007074509700636991,
+    "embedding": 0.23717082451262841,
+    "unembedding": 0.003162277660168379,
+    "norm": 0.003952847075210474
+  },
+  "estimated_flops_per_token": 1690353664,
+  "execution_plan": {
+    "parameter_or_joint_probe_pairs": 0,
+    "input_only_probe_pairs": 0,
+    "extra_prelude_forwards": 0,
+    "prelude_backwards": 1,
+    "zo_rho": 1.0,
+    "zo_input_epsilon": 0.001,
+    "zo_norm_ratio": null,
+    "transition_steps": 1000,
+    "output_name": "loop2_s16_truncated_fromfo8000_ramp1000_seed42"
+  }
+}
+{"event": "validation", "step": 8000, "tokens": 2097152000, "val_loss": 2.6494881297246766, "val_ppl": 14.146795467659292, "evaluated_rows": 4992}
+[rank6]:[E1119 05:26:09.364082066 ProcessGroupNCCL.cpp:683] [Rank 6] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=644000) ran for 644026 milliseconds before timing out.
+[rank6]:[E1119 05:26:09.373535874 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 6]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank6]:[E1119 05:26:09.373562019 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank6]:[E1119 05:26:09.373663682 ProcessGroupNCCL.cpp:2573] [PG ID 0 PG GUID 0(default_pg) Rank 6] First PG on this rank to signal dumping.
+[rank1]:[E1119 05:26:09.373986814 ProcessGroupNCCL.cpp:683] [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=644000) ran for 644068 milliseconds before timing out.
+[rank1]:[E1119 05:26:09.374796970 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 1]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank1]:[E1119 05:26:09.374826474 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank1]:[E1119 05:26:09.374940457 ProcessGroupNCCL.cpp:2573] [PG ID 0 PG GUID 0(default_pg) Rank 1] First PG on this rank to signal dumping.
+[rank2]:[E1119 05:26:09.386881519 ProcessGroupNCCL.cpp:683] [Rank 2] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=644000) ran for 644080 milliseconds before timing out.
+[rank2]:[E1119 05:26:09.387633293 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 2]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank2]:[E1119 05:26:09.387658561 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank2]:[E1119 05:26:09.387770697 ProcessGroupNCCL.cpp:2573] [PG ID 0 PG GUID 0(default_pg) Rank 2] First PG on this rank to signal dumping.
+[rank5]:[E1119 05:26:10.161605645 ProcessGroupNCCL.cpp:1794] [PG ID 0 PG GUID 0(default_pg) Rank 5] Observed flight recorder dump signal from another rank via TCPStore.
+[rank6]:[E1119 05:26:10.161663793 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 6] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank7]:[E1119 05:26:10.161648648 ProcessGroupNCCL.cpp:1794] [PG ID 0 PG GUID 0(default_pg) Rank 7] Observed flight recorder dump signal from another rank via TCPStore.
+[rank1]:[E1119 05:26:10.161673833 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 1] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank4]:[E1119 05:26:10.161769573 ProcessGroupNCCL.cpp:1794] [PG ID 0 PG GUID 0(default_pg) Rank 4] Observed flight recorder dump signal from another rank via TCPStore.
+[rank5]:[E1119 05:26:10.161808518 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 5] Received a dump signal due to a collective timeout from  rank 2 and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank3]:[E1119 05:26:10.161754893 ProcessGroupNCCL.cpp:1794] [PG ID 0 PG GUID 0(default_pg) Rank 3] Observed flight recorder dump signal from another rank via TCPStore.
+[rank7]:[E1119 05:26:10.161874125 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 7] Received a dump signal due to a collective timeout from  rank 2 and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank4]:[E1119 05:26:10.161976092 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 4] Received a dump signal due to a collective timeout from  rank 2 and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank3]:[E1119 05:26:10.162143577 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 3] Received a dump signal due to a collective timeout from  rank 2 and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank2]:[E1119 05:26:10.162435593 ProcessGroupNCCL.cpp:1858] [PG ID 0 PG GUID 0(default_pg) Rank 2] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 5, last completed NCCL work: 4.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc.
+[rank6]:[E1119 05:26:10.187718509 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 6] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank1]:[E1119 05:26:10.187737021 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 1] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank2]:[E1119 05:26:10.187765712 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 2] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank5]:[E1119 05:26:10.187773859 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 5] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank4]:[E1119 05:26:10.187776546 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 4] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank7]:[E1119 05:26:10.187780188 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 7] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank3]:[E1119 05:26:10.187839574 ProcessGroupNCCL.cpp:1575] [PG ID 0 PG GUID 0(default_pg) Rank 3] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank7]:[E1119 05:26:10.374936339 ProcessGroupNCCL.cpp:683] [Rank 7] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=645000) ran for 645069 milliseconds before timing out.
+[rank7]:[E1119 05:26:10.375619844 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 7]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank7]:[E1119 05:26:10.375643868 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank5]:[E1119 05:26:10.694508743 ProcessGroupNCCL.cpp:683] [Rank 5] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=645000) ran for 645048 milliseconds before timing out.
+[rank5]:[E1119 05:26:10.695197830 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 5]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank5]:[E1119 05:26:10.695222757 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank4]:[E1119 05:26:11.382663392 ProcessGroupNCCL.cpp:683] [Rank 4] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=646000) ran for 646075 milliseconds before timing out.
+[rank4]:[E1119 05:26:11.383361362 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 4]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank4]:[E1119 05:26:11.383387522 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank3]:[E1119 05:26:12.351377090 ProcessGroupNCCL.cpp:683] [Rank 3] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=647000) ran for 647046 milliseconds before timing out.
+[rank3]:[E1119 05:26:12.352203887 ProcessGroupNCCL.cpp:2241] [PG ID 0 PG GUID 0(default_pg) Rank 3]  failure detected by watchdog at work sequence id: 5 PG status: last enqueued work: 5, last completed work: 4
+[rank3]:[E1119 05:26:12.352228098 ProcessGroupNCCL.cpp:730] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank1]:[E1119 05:27:09.840316704 ProcessGroupNCCL.cpp:744] [Rank 1] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank1]:[E1119 05:27:09.840356819 ProcessGroupNCCL.cpp:758] [Rank 1] To avoid data inconsistency, we are taking the entire process down.
+[rank1]:[E1119 05:27:09.842783369 ProcessGroupNCCL.cpp:2057] [PG ID 0 PG GUID 0(default_pg) Rank 1] Process group watchdog thread terminated with exception: [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=644000) ran for 644068 milliseconds before timing out.
+Exception raised from checkTimeout at /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:686 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7fb62095cb80 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x247 (0x7fb6218385b7 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #2: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1691 (0x7fb62183d1c1 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #3: c10d::ProcessGroupNCCL::Watchdog::run() + 0xdf (0x7fb62183e40f in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdbbf4 (0x7fb6786c7bf4 in /root/miniconda3/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x94ac3 (0x7fb6807d5ac3 in /usr/lib/x86_64-linux-gnu/libc.so.6)
+frame #6: clone + 0x44 (0x7fb680866a04 in /usr/lib/x86_64-linux-gnu/libc.so.6)
+
+[rank6]:[E1119 05:27:09.845302856 ProcessGroupNCCL.cpp:744] [Rank 6] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank6]:[E1119 05:27:09.845331713 ProcessGroupNCCL.cpp:758] [Rank 6] To avoid data inconsistency, we are taking the entire process down.
+[rank6]:[E1119 05:27:09.846657918 ProcessGroupNCCL.cpp:2057] [PG ID 0 PG GUID 0(default_pg) Rank 6] Process group watchdog thread terminated with exception: [Rank 6] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=644000) ran for 644026 milliseconds before timing out.
+Exception raised from checkTimeout at /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:686 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7effc1f7cb80 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x247 (0x7eff63c385b7 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #2: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1691 (0x7eff63c3d1c1 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #3: c10d::ProcessGroupNCCL::Watchdog::run() + 0xdf (0x7eff63c3e40f in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdbbf4 (0x7effbaac7bf4 in /root/miniconda3/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x94ac3 (0x7effc2df7ac3 in /usr/lib/x86_64-linux-gnu/libc.so.6)
+frame #6: clone + 0x44 (0x7effc2e88a04 in /usr/lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[E1119 05:27:09.847211349 ProcessGroupNCCL.cpp:744] [Rank 2] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank2]:[E1119 05:27:09.847240926 ProcessGroupNCCL.cpp:758] [Rank 2] To avoid data inconsistency, we are taking the entire process down.
+[rank2]:[E1119 05:27:09.848553923 ProcessGroupNCCL.cpp:2057] [PG ID 0 PG GUID 0(default_pg) Rank 2] Process group watchdog thread terminated with exception: [Rank 2] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=5, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=644000) ran for 644080 milliseconds before timing out.
+Exception raised from checkTimeout at /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:686 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7f221455cb80 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x247 (0x7f22154385b7 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #2: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1691 (0x7f221543d1c1 in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #3: c10d::ProcessGroupNCCL::Watchdog::run() + 0xdf (0x7f221543e40f in /data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdbbf4 (0x7f226c2c7bf4 in /root/miniconda3/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x94ac3 (0x7f22744c8ac3 in /usr/lib/x86_64-linux-gnu/libc.so.6)
+frame #6: clone + 0x44 (0x7f2274559a04 in /usr/lib/x86_64-linux-gnu/libc.so.6)
+
+W1119 05:27:10.313000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860712 closing signal SIGTERM
+W1119 05:27:10.319000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860714 closing signal SIGTERM
+W1119 05:27:10.321000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860715 closing signal SIGTERM
+W1119 05:27:10.324000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860716 closing signal SIGTERM
+W1119 05:27:10.328000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860717 closing signal SIGTERM
+W1119 05:27:10.332000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860718 closing signal SIGTERM
+W1119 05:27:10.333000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 860719 closing signal SIGTERM
+E1119 05:27:11.236000 860480 /autodl-fs/data/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: -6) local_rank: 1 (pid: 860713) of binary: /data_fs/zhangyuxuan/HybridOp/envs/train/bin/python
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/run.py", line 940, in <module>
+    main()
+  File "/data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data_fs/zhangyuxuan/HybridOp/envs/train/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError:
+=======================================================
+hybrid.train FAILED
+-------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+-------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-11-19_05:27:10
+  host      : localhost
+  rank      : 1 (local_rank: 1)
+  exitcode  : -6 (pid: 860713)
+  error_file: <N/A>
+  traceback : Signal 6 (SIGABRT) received by PID 860713
+=======================================================

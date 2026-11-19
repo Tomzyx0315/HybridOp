@@ -290,3 +290,133 @@ ZO 范数约 393–670，缩放后约 0.0488–0.0576，有效 lambda 约 7.79e-
 本地归档：[结果快照与验证序列](results/20261118_norm_pretrain_2250/summary.json)、
 [更新后的验证曲线](results/20261118_norm_pretrain_2250/validation.png)。服务器报告位于
 本轮实验的 `reports/20261118_2250/`。
+
+## 2026-11-18 完整 FO 后渐进切换实验
+
+用户选择从完整 FO 的 8,000 步 checkpoint 出发，在 1,000 次更新内逐渐替换首轮
+精确梯度，然后继续到原定 19,523 步。新队列依次运行渐变 truncated、范数比 1、
+0.3、0.1，完整 FO 参考复用原训练曲线。所有分支恢复同一份权重、分片优化器状态、
+RNG 和数据位置，保留原学习率日程，不重启 warmup。
+
+第 8,001 步更新为完整 FO，第 9,000 步更新已完全使用目标梯度。过渡系数 s 在这
+1,000 次更新中线性从 0 到 1。共享参数使用 `f + (1-s)*h`，norm ZO 分支再加
+`s*alpha*||f||/||z||*z`，其中 f 始终是跨卡平均后的纯末轮梯度。prelude 的首轮
+间接梯度也乘 (1-s)，直接路径保留。过渡结束后与现有 truncated/hybrid-none
+梯度路径一致。中间阶段重算首轮精确 VJP 和 prelude，并计入额外 FLOPs；过渡
+结束后释放精确梯度缓冲区。每 250 步验证、每 2,000 步保存，支持过渡中途续训。
+
+实验目录：`/data_fs/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233`。
+tmux：`hybridop-fo-transition`。北京时间 23:38 复查会话存活，状态为
+`waiting_for_norm_pretrain`：原从零实验正在运行范数比 0.1；其队列成功结束后，
+新队列会自动开始。若原队列失败，新队列不会直接占用 GPU。此记录为准备和排队
+状态，尚无渐进切换的正式训练结果。
+
+源码、命令和状态分别位于 `source/`、`run_queue.py`/`run.sh`、`status.json`，
+具体配置和源码哈希在 `manifest.json`。入口指针为
+`/data_fs/zhangyuxuan/HybridOp/setup/latest_fo_transition_experiment.txt`。
+各分支独立保存到 `<分支>/run/`，不覆盖原 FO checkpoint。
+
+验收通过：75 项 CPU/配置/续训测试、4 项 CUDA BF16 eager/compiled 检查，以及
+4 组两卡检查（norm ZO 的起点/中点/终点，truncated 中点）。CPU 测试比较整个
+模型的梯度凸组合，覆盖 prelude、累积和过渡两端；过渡中途恢复后的最终权重、
+优化器和数据/RNG 状态与连续运行完全一致。两卡检查验证先平均再混合、优化器
+只更新一次，以及各 rank 参数相同。CUDA 重算按 BF16 舍入容差检查；验收使用小模型。
+四个分支的原始 horizon、学习率、模型和 parent checkpoint 配置均已核对。
+
+实现和启动说明见 [`README.md`](README.md) 的“从完整 FO 渐进切换”一节。
+本地归档：[配置及源码清单](results/20261118_fo_transition_setup/manifest.json)、
+[验收与排队状态](results/20261118_fo_transition_setup/acceptance.json)。服务器检查日志在
+实验目录的 `checks/`。
+
+## 2026-11-19 从零实验最终结果与渐进切换故障
+
+北京时间 09:52 起检查：从零的 norm ZO 三组全部完成 19,523 步，最后一组
+0.1 于 05:11 完成。所有最终结果均使用相同的 34,560 条验证序列。
+
+| 方法 | 最终验证 loss | 相对 truncated |
+| --- | ---: | ---: |
+| 完整 FO | 2.434350 | -0.068516 |
+| Truncated | 2.502866 | 0 |
+| Norm ZO 1 | 2.658942 | +0.156076 |
+| Norm ZO 0.3 | 2.546590 | +0.043724 |
+| Norm ZO 0.1 | 2.485650 | -0.017216 |
+
+0.1 在 1,000 和 2,000 步时仍落后，但从 3,500 步起，每个固定 4,992 条序列的
+验证点都优于 truncated，后期差距约 -0.017。其 8,000/10,000/16,000/19,500
+步 loss 分别为 2.710741/2.663868/2.543101/2.477476。这一组从零开始，无 FO
+硬切过程，因此收益不能全部归因于缓和硬切换；仍然只有一个种子，且没有同范数
+随机噪声对照，不能据此确认收益来自 ZO 的方向信息。
+
+五组最终 checkpoint 各 18 个预期文件均存在且非空；训练记录无非有限数值。
+三组范数匹配误差均小于 3e-16。初始化第 1 步原始 ZO 为零，缩放后也为零，
+该退化点单独记录，不计入非零 ZO 的匹配比例检查。各 norm 组除 mode、输出
+目录和 zo_norm_ratio 外，配置与 truncated 对照一致。
+
+渐进切换队列于 05:11 开始 truncated 分支，初始 8,000 步验证为 2.649488，
+与父 checkpoint 一致；随后首次训练更新阶段发生 NCCL ALLREDUCE 超时，队列
+于 05:27 停止。没有完成更新的日志，也没有新 checkpoint。其他三分支未启动。
+日志显示 rank 1–7 在等待通信，现有日志不足以确定 rank 0 未到达同步点的原因；
+不能将其解释为梯度发散。检查时 GPU 全部空闲，本次检查未重启或修改训练进程。
+
+本地归档：[最终数据与健康检查](results/20261119_norm_pretrain_final/summary.json)、
+[完整验证曲线](results/20261119_norm_pretrain_final/validation.png)、
+[渐进切换报错](results/20261119_fo_transition_failure/console.log)、
+[失败队列状态](results/20261119_fo_transition_failure/status.json)。服务器最终报告位于
+从零实验目录的 `reports/20261119_final/`。
+
+## 2026-11-19 空闲 GPU 排队启动
+
+用户要求每隔几分钟检查 GPU，空闲后先完成 seed 43 配对复现，再运行渐进切换。
+北京时间 11:31 已启动 tmux 会话 `hybridop-gpu-queue`，首次检查正确识别出
+GPU 0–7 各有计算进程、占用约 16.1 GiB，队列状态为 `waiting_for_gpus`，尚未
+开始正式训练。后续切换队列状态为 `waiting_for_replication`。
+
+每 180 秒通过 nvidia-smi 查询物理 GPU 0–7；连续两次所有卡同时满足：没有计算
+进程、每卡已用显存 <=256 MiB、利用率 <=5%，才启动一个实验。任一卡忙碌会
+重置连续次数；查询失败、20 秒超时、缺少 GPU 或指标为 N/A 均继续等待。
+每个实验开始前重新检查。通过检查后使用 GPU UUID 设置 CUDA_VISIBLE_DEVICES，
+确保检查和使用的是同一组物理卡。锁文件位于 `locks/gpu_research_queue.lock`，
+防止我们的队列重复占卡；它不是跨账户 GPU 预约，不会阻止其他账户随后启动任务。
+
+顺序：seed43 truncated → seed43 norm ZO 0.1 → FO8000 渐进 truncated →
+渐进 norm ZO 1 → 0.3 → 0.1。seed43 两组初始化均为 43，ZO 方向种子为 12346，
+数据顺序和原 19,523 步日程保持一致。切换分支仍从 seed42 完整 FO8000 恢复，
+1,000 次更新过渡至目标梯度，训练至 19,523 步。只有前一个实验成功结束且最终
+checkpoint 文件完整，才开始下一个；失败会停止队列。
+
+服务器目录：
+
+- 配对复现：`/data_fs/zhangyuxuan/HybridOp/experiments/repro_seed43_20261119_105309`
+- 渐进切换：`/data_fs/zhangyuxuan/HybridOp/experiments/fo_transition_20261119_105309`
+- 总入口：复现目录下 `pipeline.sh`；每组有 `run.sh`、`manifest.json`、`status.json`
+- 各分支的 `gpu_wait.json` 保存最近检查；`console.log` 保存检查历史及训练输出
+- 指针：`/data_fs/zhangyuxuan/HybridOp/setup/latest_gpu_queue_pipeline.txt`
+
+排队实现为 `hybrid/wait_for_gpus.py` 与 `hybrid/experiment_queue.py`。7 项检查在
+本地和 hd-4 均通过，覆盖忙碌进程、显存/利用率、查询失败、连续计数重置，以及
+命令仅在两次检查通过后启动并绑定正确 UUID。部署时已核对两份源码的训练核心
+文件与已通过实际 219M/8卡验收的版本一致。此前显存冲突暴露的错误退出问题
+已经修复：失败 rank 不再进入 collective cleanup；两卡故障注入在 46 秒内退出，
+truncated/norm ZO 的各 6 步实际模型过渡验收均成功。
+
+本地归档：[排队部署、配置与首次检测快照](results/20261119_gpu_queue_setup/snapshot.json)。
+
+### 2026-11-19 21:40（北京时间）seed 43 复现进度
+
+排队脚本在 GPU 空闲后于 12:07 启动 truncated，并于 16:34 完成 19,523 步，
+最终 34,560 条序列验证 loss 为 2.50442953。norm ZO 0.1 于 16:37 启动，
+本次快照训练至 16,810 步；最近完整验证为 16,750 步。渐进切换仍等待复现完成。
+
+相同 16,750 步、4,992 条验证序列：
+
+| 种子 | Truncated | Norm ZO 0.1 | ZO - truncated |
+| --- | ---: | ---: | ---: |
+| 42 | 2.54475630 | 2.52850830 | -0.01624800 |
+| 43 | 2.54711423 | 2.52942458 | -0.01768966 |
+
+新种子目前复现了中途的正向差距，但 norm ZO 0.1 尚未完成，不把中途结果当作
+最终结论。两组日志没有 NaN/Inf，范数匹配比例符合设置。训练配置和进程未更改。
+
+本地归档：[带时间戳的结果与验证序列](results/20261119_seed43_progress/summary.json)、
+[两个种子的验证曲线](results/20261119_seed43_progress/validation.png)、
+[错误退出与实际模型切换验收](results/20261119_seed43_progress/transition_acceptance.json)。

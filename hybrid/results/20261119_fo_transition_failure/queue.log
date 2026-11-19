@@ -1,0 +1,15 @@
+{"event": "start", "utc": "2026-11-18T21:11:55.153382+00:00", "variant": "truncated", "command": ["bash", "hybrid/scripts/fo_transition.sh", "truncated", "/data_fs/zhangyuxuan/HybridOp/experiments/formal_20261117_215621/full_fo/run", "--save-every", "2000", "--output-dir", "/autodl-fs/data/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233/truncated/run"]}
+{"event": "validation", "utc": "2026-11-18T21:15:18.806974+00:00", "variant": "truncated", "step": 8000, "tokens": 2097152000, "val_loss": 2.6494881297246766, "val_ppl": 14.146795467659292, "evaluated_rows": 4992}
+{"event": "failed", "utc": "2026-11-18T21:27:11.825138+00:00", "variant": "truncated", "error": "truncated exited with code 1; queue stopped"}
+Traceback (most recent call last):
+  File "/data_fs/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233/run_queue.py", line 88, in <module>
+    main()
+  File "/data_fs/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233/run_queue.py", line 71, in main
+    raise RuntimeError(f"{name} exited with code {code}; queue stopped")
+RuntimeError: truncated exited with code 1; queue stopped
+Traceback (most recent call last):
+  File "/data_fs/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233/run_queue.py", line 88, in <module>
+    main()
+  File "/data_fs/zhangyuxuan/HybridOp/experiments/fo_transition_20261118_231233/run_queue.py", line 71, in main
+    raise RuntimeError(f"{name} exited with code {code}; queue stopped")
+RuntimeError: truncated exited with code 1; queue stopped

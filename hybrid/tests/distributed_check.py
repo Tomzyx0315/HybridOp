@@ -14,14 +14,16 @@ from hybrid.model import ExperimentGPT
 from hybrid.norm_matching import mix_shared_gradients, separated_backward
 from hybrid.steps import backward_microbatch
 from hybrid.train import build_optimizer, model_config
+from hybrid.transition import mix_transition_gradients, transition_backward
 from nanochat.common import compute_cleanup, compute_init
 from nanochat.optim import MuonAdamW
 
 
-def check_variant(prelude_mode, rank, world, device, norm_ratio=None):
+def check_variant(prelude_mode, rank, world, device, norm_ratio=None, fraction=None):
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    cfg = Config(mode="hybrid", prelude_mode=prelude_mode, size=1, aspect_ratio=32,
+    cfg = Config(mode="truncated" if fraction is not None and norm_ratio is None else "hybrid",
+                 prelude_mode=prelude_mode, size=1, aspect_ratio=32,
                  head_dim=8, sequence_len=8, vocab_size=64, n_prelude=1, n_recur_block=1, n_coda=1,
                  device_batch_size=1, total_batch_size=8 * world, num_iterations=4, compile=False,
                  zo_norm_ratio=norm_ratio)
@@ -47,7 +49,32 @@ def check_variant(prelude_mode, rank, world, device, norm_ratio=None):
         gen = torch.Generator(device=device).manual_seed(200 + rank + step * world)
         x = torch.randint(cfg.vocab_size, (1, 8), device=device, generator=gen)
         y = torch.randint(cfg.vocab_size, (1, 8), device=device, generator=gen)
-        if norm_ratio is None:
+        if fraction is not None:
+            shared = dict(model.shared_named_parameters())
+            exact = {n: torch.zeros_like(p) for n, p in shared.items()}
+            noise = {n: torch.zeros_like(p) for n, p in shared.items()} if norm_ratio is not None else None
+            transition_backward(model, x, y, cfg, noise, exact, fraction,
+                                step=step, micro=0, rank=rank, accumulation=1)
+            averaged_fo = {n: p.grad.clone() for n, p in shared.items()}
+            averaged_exact = {n: g.clone() for n, g in exact.items()}
+            averaged_noise = {n: g.clone() for n, g in noise.items()} if noise is not None else {}
+            for pack in (averaged_fo, averaged_exact, averaged_noise):
+                for tensor in pack.values():
+                    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+                    tensor.div_(world)
+            fo_norm = sum(g.double().square().sum() for g in averaged_fo.values()).sqrt()
+            noise_norm = sum(g.double().square().sum() for g in averaged_noise.values()) ** 0.5
+            scale = fraction * norm_ratio * fo_norm.item() / noise_norm if noise_norm else 0.0
+            mix_transition_gradients(model, noise, exact, norm_ratio, fraction)
+            for n, p in shared.items():
+                actual = p.grad.clone()
+                dist.all_reduce(actual, op=dist.ReduceOp.SUM)
+                actual.div_(world)
+                expected = averaged_fo[n] + (1-fraction)*averaged_exact[n]
+                if noise is not None:
+                    expected = expected + scale*averaged_noise[n]
+                torch.testing.assert_close(actual, expected)
+        elif norm_ratio is None:
             backward_microbatch(model, x, y, cfg, step=step, micro_step=0, rank=rank, accumulation_steps=1)
         else:
             buffers = {n: torch.zeros_like(p) for n, p in model.shared_named_parameters()}
@@ -82,23 +109,24 @@ def check_variant(prelude_mode, rank, world, device, norm_ratio=None):
         model.zero_grad(set_to_none=True)
         reference.zero_grad(set_to_none=True)
     if rank == 0:
-        print(f"PASS {prelude_mode}, norm_ratio={norm_ratio}: averaging, single update, identical rank parameters")
+        print(f"PASS {prelude_mode}, norm_ratio={norm_ratio}, transition={fraction}: averaging, single update, identical rank parameters")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prelude-mode", choices=["all", *PRELUDE_MODES], default="all")
     parser.add_argument("--norm-ratio", type=float)
+    parser.add_argument("--transition-fraction", type=float)
     args = parser.parse_args()
     _, rank, _, world, device = compute_init("cuda")
     try:
         if world < 2:
             raise ValueError("Launch with at least two GPU ranks")
         torch._dynamo.config.disable = True
-        modes = (["none"] if args.norm_ratio is not None else
+        modes = (["none"] if args.norm_ratio is not None or args.transition_fraction is not None else
                  (PRELUDE_MODES if args.prelude_mode == "all" else [args.prelude_mode]))
         for mode in modes:
-            check_variant(mode, rank, world, device, args.norm_ratio)
+            check_variant(mode, rank, world, device, args.norm_ratio, args.transition_fraction)
     finally:
         compute_cleanup()
 

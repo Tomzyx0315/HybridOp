@@ -55,6 +55,9 @@ class Config:
     save_every: int = -1
     log_every: int = 10
     resume_step: int = -1
+    fo_checkpoint_dir: str = ""
+    fo_checkpoint_step: int = -1
+    transition_steps: int = 0
     stop_after: int = -1
     synthetic_data: bool = False
     dry_run: bool = False
@@ -107,6 +110,17 @@ class Config:
             raise ValueError("num_iterations must be -1 or positive")
         if self.resume_step < -1 or self.stop_after < -1:
             raise ValueError("resume_step/stop_after must be -1 or nonnegative")
+        if bool(self.fo_checkpoint_dir) != (self.fo_checkpoint_step >= 0):
+            raise ValueError("Set fo_checkpoint_dir and a nonnegative fo_checkpoint_step together")
+        if self.transition_steps < 0 or self.transition_steps == 1:
+            raise ValueError("transition_steps must be 0 (immediate) or at least 2")
+        if self.transition_steps and not self.fo_checkpoint_dir:
+            raise ValueError("A transition requires a full-FO checkpoint")
+        if self.fo_checkpoint_dir:
+            if self.mode not in {"truncated", "hybrid"} or self.prelude_mode != "none":
+                raise ValueError("FO checkpoint forks target truncated or hybrid/none")
+            if self.mode == "hybrid" and self.zo_norm_ratio is None:
+                raise ValueError("FO checkpoint hybrid forks require zo_norm_ratio")
         if self.num_recur < 2:
             raise ValueError("These comparisons require at least two recurrences")
 
@@ -119,6 +133,8 @@ def default_run_name(cfg: Config):
         name += f"_prelude_{cfg.prelude_mode}"
     if cfg.zo_norm_ratio is not None:
         name += f"_norm{cfg.zo_norm_ratio:g}"
+    if cfg.fo_checkpoint_dir:
+        name += f"_fromfo{cfg.fo_checkpoint_step}_ramp{cfg.transition_steps}"
     return f"{name}_seed{cfg.seed}"
 
 
@@ -131,6 +147,7 @@ def execution_plan(cfg: Config):
                 prelude_backwards=1,
                 zo_rho=cfg.zo_rho, zo_input_epsilon=cfg.zo_input_epsilon,
                 zo_norm_ratio=cfg.zo_norm_ratio,
+                transition_steps=cfg.transition_steps,
                 output_name=default_run_name(cfg))
 
 
@@ -180,6 +197,9 @@ def recipe(cfg: Config, world_size: int):
     steps = cfg.num_iterations if cfg.num_iterations > 0 else target_tokens // cfg.total_batch_size
     if steps < 1:
         raise ValueError("Training horizon is shorter than one global batch")
+    if cfg.fo_checkpoint_dir and (cfg.fo_checkpoint_step >= steps or
+                                  cfg.fo_checkpoint_step + cfg.transition_steps > steps):
+        raise ValueError("FO fork and transition must fit in the original training horizon")
     batch_scale = (cfg.total_batch_size / 262144) ** 0.558
     data_scale = (target_tokens / d_ref) ** -0.32
     width_scale = (cfg.width / (10 * cfg.aspect_ratio)) ** -0.5
@@ -204,6 +224,13 @@ def lr_multiplier(step: int, steps: int, cfg: Config):
         return 1.0
     progress = (steps - step) / warmdown
     return progress + (1 - progress) * cfg.final_lr_frac
+
+
+def transition_fraction(step: int, cfg: Config):
+    """First resumed update is FO; the last of N transition updates is the target."""
+    if not cfg.fo_checkpoint_dir or cfg.transition_steps == 0:
+        return 1.0
+    return min(1.0, max(0.0, (step - cfg.fo_checkpoint_step) / (cfg.transition_steps - 1)))
 
 
 def parse_args(argv=None):

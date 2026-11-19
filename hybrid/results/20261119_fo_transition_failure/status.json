@@ -1,0 +1,13 @@
+{
+  "status": "failed",
+  "current": "truncated",
+  "last_step": 8000,
+  "completed": [],
+  "queued": [
+    "norm_match_1",
+    "norm_match_0.3",
+    "norm_match_0.1"
+  ],
+  "updated_utc": "2026-11-18T21:27:11.818815+00:00",
+  "error": "truncated exited with code 1; queue stopped"
+}

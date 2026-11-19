@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import asdict
+import traceback
+from dataclasses import asdict, replace
 from pathlib import Path
 
-from hybrid.config import default_run_name, execution_plan, lr_multiplier, normalize_zo_settings, parse_args, recipe
+from hybrid.config import (default_run_name, execution_plan, lr_multiplier, normalize_zo_settings,
+                           parse_args, recipe, transition_fraction)
 
 
 def main(argv=None):
@@ -20,7 +22,9 @@ def main(argv=None):
                           "execution_plan": execution_plan(cfg)}, indent=2))
         return
     # A dry run works without torch, CUDA, a tokenizer download, or a dataset.
-    run_training(cfg, resolved)
+    from hybrid.diagnostics import stall_tracebacks
+    with stall_tracebacks() as heartbeat:
+        run_training(cfg, resolved, heartbeat=heartbeat)
 
 
 def model_config(cfg):
@@ -86,6 +90,9 @@ def validate_resume(cfg, meta, world_size):
                "final_eval_rows", "save_every", "log_every", "run", "dry_run", "compile"}
     saved_config = dict(meta["user_config"])
     saved_config.setdefault("zo_norm_ratio", None)
+    saved_config.setdefault("fo_checkpoint_dir", "")
+    saved_config.setdefault("fo_checkpoint_step", -1)
+    saved_config.setdefault("transition_steps", 0)
     # Checkpoints from the original Hybrid implementation predate these fields.
     saved_config.setdefault("prelude_mode", "none")
     if "zo_rho" not in saved_config:
@@ -96,7 +103,18 @@ def validate_resume(cfg, meta, world_size):
             raise ValueError(f"Resume changes experimental setting {key}; use a new run instead")
 
 
-def run_training(cfg, resolved):
+def validate_fo_fork(cfg, meta, world_size, resolved):
+    if meta["user_config"]["mode"] != "full_fo" or meta["step"] != cfg.fo_checkpoint_step:
+        raise ValueError("Fork source must be the requested full-FO checkpoint")
+    source_cfg = replace(cfg, mode="full_fo", zo_norm_ratio=None, fo_checkpoint_dir="",
+                         fo_checkpoint_step=-1, transition_steps=0)
+    validate_resume(source_cfg, meta, world_size)
+    for key in ("num_iterations", "grad_accum_steps", "initial_lrs", "total_parameters", "actual_tokens"):
+        if meta["resolved"][key] != resolved[key]:
+            raise ValueError(f"FO fork changes original recipe: {key}")
+
+
+def run_training(cfg, resolved, heartbeat=lambda: None):
     # Triton/Inductor artifacts can race when ranks compile simultaneously on a
     # shared filesystem. Keep each rank's artifacts under the configured root.
     # This must happen before importing torch, which reads cache environment vars.
@@ -109,6 +127,8 @@ def run_training(cfg, resolved):
     from hybrid.model import ExperimentGPT, training_precision
     from hybrid.steps import backward_microbatch, estimated_flops_per_token
     from hybrid.norm_matching import mix_shared_gradients, separated_backward
+    from hybrid.transition import (mix_transition_gradients, transition_backward,
+                                   transition_flops_per_token)
     from nanochat.checkpoint_manager import load_checkpoint, save_checkpoint
     from nanochat.common import compute_cleanup, compute_init, get_base_dir, print0
     from nanochat.dataloader import prepacked_data_loader, prepacked_eval_loader
@@ -117,6 +137,7 @@ def run_training(cfg, resolved):
     if cfg.device != "cuda" and all(key in os.environ for key in ("RANK", "LOCAL_RANK", "WORLD_SIZE")):
         raise ValueError("CPU tests must use python -m hybrid.train directly, without torchrun; distributed training uses CUDA/NCCL")
     _, rank, _, world_size, device = compute_init(cfg.device)
+    failed = False
     try:
         torch.manual_seed(cfg.seed)
         if device.type == "cuda":
@@ -144,16 +165,25 @@ def run_training(cfg, resolved):
         start_step = 0
         loader_state = None
         total_train_seconds = 0.0
-        if cfg.resume_step >= 0:
-            weights, opt_state, meta = load_checkpoint(str(output), cfg.resume_step, device,
+        total_estimated_flops = 0
+        if cfg.resume_step >= 0 or cfg.fo_checkpoint_dir:
+            loading_resume = cfg.resume_step >= 0
+            source = output if loading_resume else Path(cfg.fo_checkpoint_dir).expanduser()
+            source_step = cfg.resume_step if loading_resume else cfg.fo_checkpoint_step
+            weights, opt_state, meta = load_checkpoint(str(source), source_step, device,
                                                         load_optimizer=True, rank=rank)
-            validate_resume(cfg, meta, world_size)
+            if loading_resume:
+                validate_resume(cfg, meta, world_size)
+            else:
+                validate_fo_fork(cfg, meta, world_size, resolved)
             model.load_state_dict(weights, strict=True)
             optimizer.load_state_dict(opt_state)
-            runtime = load_rank_state(output, cfg.resume_step, rank)
+            runtime = load_rank_state(source, source_step, rank)
             loader_state = runtime["dataloader_state"]
             start_step = meta["step"]
             total_train_seconds = meta["total_train_seconds"]
+            total_estimated_flops = meta.get("estimated_total_flops",
+                meta["resolved"]["estimated_flops_per_token"] * start_step * cfg.total_batch_size)
             torch.set_rng_state(runtime["cpu_rng"])
             if device.type == "cuda":
                 torch.cuda.set_rng_state(runtime["cuda_rng"], device)
@@ -178,6 +208,8 @@ def run_training(cfg, resolved):
         accumulation = resolved["grad_accum_steps"]
         zo_buffers = ({name: torch.zeros_like(p) for name, p in model.shared_named_parameters()}
                       if cfg.zo_norm_ratio is not None else None)
+        exact_buffers = ({name: torch.zeros_like(p) for name, p in model.shared_named_parameters()}
+                         if cfg.fo_checkpoint_dir and transition_fraction(start_step, cfg) < 1 else None)
         reports_input_zo = cfg.mode == "hybrid" and cfg.prelude_mode != "none" and cfg.zo_lambda != 0
         flops_per_token = estimated_flops_per_token(model, cfg)
         resolved = {**resolved, "estimated_flops_per_token": flops_per_token,
@@ -186,6 +218,7 @@ def run_training(cfg, resolved):
             (output / f"config_start_{start_step:06d}.json").write_text(json.dumps(
                 {"config": asdict(cfg), "resolved": resolved, "world_size": world_size}, indent=2) + "\n")
             print0(json.dumps({"mode": cfg.mode, "output": str(output), **resolved}, indent=2))
+        heartbeat()
         wandb_run = None
         if rank == 0 and cfg.run != "dummy":
             import wandb
@@ -217,6 +250,7 @@ def run_training(cfg, resolved):
             model.train()
             emit(dict(event="validation", step=step, tokens=step * cfg.total_batch_size,
                       val_loss=metrics.loss, val_ppl=metrics.ppl, evaluated_rows=eval_steps * stride))
+            heartbeat()
 
         def save(step):
             runtime = dict(dataloader_state=loader_state, cpu_rng=torch.get_rng_state())
@@ -227,13 +261,18 @@ def run_training(cfg, resolved):
             save_checkpoint(str(output), step, model.state_dict(), optimizer.state_dict(),
                             dict(step=step, model_config=asdict(config), user_config=asdict(cfg),
                                  resolved=resolved, world_size=world_size,
-                                 total_train_seconds=total_train_seconds), rank=rank)
+                                 total_train_seconds=total_train_seconds,
+                                 estimated_total_flops=total_estimated_flops), rank=rank)
             if dist.is_initialized():
                 dist.barrier()
+            heartbeat()
 
         if cfg.eval_every > 0:
             evaluate(start_step)
         for step in range(start_step, end_step):
+            fraction = transition_fraction(step, cfg)
+            if fraction == 1:
+                exact_buffers = None
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
                 torch.cuda.reset_peak_memory_stats(device)
@@ -247,9 +286,15 @@ def run_training(cfg, resolved):
             if zo_buffers is not None:
                 for buffer in zo_buffers.values():
                     buffer.zero_()
+            if exact_buffers is not None:
+                for buffer in exact_buffers.values():
+                    buffer.zero_()
             for micro in range(accumulation):
                 x, y, loader_state = next(train_loader)
-                if zo_buffers is None:
+                if cfg.fo_checkpoint_dir:
+                    loss, extra = transition_backward(model, x, y, cfg, zo_buffers, exact_buffers,
+                        fraction, step=step, micro=micro, rank=rank, accumulation=accumulation)
+                elif zo_buffers is None:
                     loss, extra = backward_microbatch(model, x, y, cfg, step=step, micro_step=micro,
                                                        rank=rank, accumulation_steps=accumulation)
                 else:
@@ -261,8 +306,13 @@ def run_training(cfg, resolved):
                 input_abs += extra.get("zo_input_directional_abs", 0) / accumulation
                 input_norm += extra.get("zo_input_grad_norm", 0) / accumulation
                 direct_norm += extra.get("prelude_direct_grad_norm", 0) / accumulation
-            match_metrics = (mix_shared_gradients(model, zo_buffers, cfg.zo_norm_ratio)
-                             if zo_buffers is not None else {})
+            if cfg.fo_checkpoint_dir:
+                match_metrics = mix_transition_gradients(model, zo_buffers, exact_buffers,
+                                                         cfg.zo_norm_ratio, fraction)
+                match_metrics.update(transition_fraction=fraction, early_exact_weight=1-fraction)
+            else:
+                match_metrics = (mix_shared_gradients(model, zo_buffers, cfg.zo_norm_ratio)
+                                 if zo_buffers is not None else {})
             # Ordinary modes average the complete gradient inside the optimizer.
             # Norm matching first averages the shared FO/ZO buffers separately;
             # their identical mixed replicas are preserved by the optimizer AVG.
@@ -297,6 +347,10 @@ def run_training(cfg, resolved):
                 averages /= world_size
             seconds = maxima[0].item()
             total_train_seconds += seconds
+            heartbeat()
+            step_flops = (transition_flops_per_token(model, cfg, fraction)
+                          if cfg.fo_checkpoint_dir else flops_per_token)
+            total_estimated_flops += step_flops * cfg.total_batch_size
             completed = step + 1
             if completed % cfg.log_every == 0 or completed == start_step + 1 or completed == end_step:
                 emit(dict(event="train", step=completed, mode=cfg.mode, prelude_mode=cfg.prelude_mode,
@@ -308,7 +362,7 @@ def run_training(cfg, resolved):
                           zo_input_directional_abs=averages[3].item() if reports_input_zo else None,
                           zo_input_grad_norm=averages[4].item() if reports_input_zo else None,
                           prelude_direct_grad_norm=averages[5].item() if reports_input_zo else None,
-                          estimated_total_flops=flops_per_token * completed * cfg.total_batch_size,
+                          estimated_total_flops=total_estimated_flops,
                           lr_matrix=optimizer.param_groups[3]["lr"],
                           lr_embedding=optimizer.param_groups[1]["lr"],
                           zo_epsilon=cfg.zo_epsilon, zo_input_epsilon=cfg.zo_input_epsilon, zo_rho=cfg.zo_rho,
@@ -321,8 +375,18 @@ def run_training(cfg, resolved):
                 save(completed)
         if wandb_run is not None:
             wandb_run.finish()
+    except BaseException:
+        failed = True
+        # Cleanup can itself wait for other NCCL ranks. Preserve the original
+        # Python exception before entering it, rather than losing it in a timeout.
+        traceback.print_exc()
+        raise
     finally:
-        compute_cleanup()
+        # A failed rank must exit so torchrun can terminate its peers. Calling
+        # collective NCCL shutdown here can hang while peers wait in all_reduce,
+        # concealing the original exception behind a later watchdog timeout.
+        if not failed:
+            compute_cleanup()
 
 
 if __name__ == "__main__":

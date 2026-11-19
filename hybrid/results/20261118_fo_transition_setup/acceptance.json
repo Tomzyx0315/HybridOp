@@ -1,0 +1,37 @@
+{
+  "cpu_tests": 75,
+  "cuda_tests": 4,
+  "distributed_checks": [
+    {
+      "label": "norm_start",
+      "exit_code": 0
+    },
+    {
+      "label": "norm_middle",
+      "exit_code": 0
+    },
+    {
+      "label": "norm_end",
+      "exit_code": 0
+    },
+    {
+      "label": "truncated_middle",
+      "exit_code": 0
+    }
+  ],
+  "parent_recipe_checks": 4,
+  "source_hashes_verified": true,
+  "queue_state": {
+    "status": "waiting_for_norm_pretrain",
+    "wait_for": "/data_fs/zhangyuxuan/HybridOp/experiments/norm_pretrain_20261118_112549",
+    "queued": [
+      "truncated",
+      "norm_match_1",
+      "norm_match_0.3",
+      "norm_match_0.1"
+    ],
+    "source_step": 8000,
+    "transition_steps": 1000,
+    "final_step": 19523
+  }
+}
